@@ -1,10 +1,12 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt::format::FmtSpan};
 
 mod export;
 mod fallback;
 mod query;
+mod traces;
 mod writer;
 
 pub use query::{LogOutput, LogQuery, run as query};
@@ -18,6 +20,7 @@ const DEFAULT_MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
 pub struct LogGuard {
     health: LogHealth,
     exporter: Option<tokio::task::JoinHandle<()>>,
+    tracer_provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
 }
 
 pub fn init(incident_dir: &Path) -> Result<LogGuard> {
@@ -26,6 +29,7 @@ pub fn init(incident_dir: &Path) -> Result<LogGuard> {
         .with_context(|| format!("cannot create log directory: {}", directory.display()))?;
     let retention_days = retention_days();
     let export = export::configure(&directory)?;
+    let tracer_provider = traces::configure()?;
     let config = WriterConfig {
         directory: directory.clone(),
         max_file_bytes: max_file_bytes(),
@@ -42,14 +46,27 @@ pub fn init(incident_dir: &Path) -> Result<LogGuard> {
         .map(EnvFilter::new)
         .unwrap_or_else(|| EnvFilter::new(DEFAULT_FILTER));
 
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
+    let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(appender)
         .json()
         .with_current_span(true)
         .with_span_list(true)
         .with_span_events(FmtSpan::CLOSE)
         .with_ansi(false)
+        .with_filter(filter);
+    use opentelemetry::trace::TracerProvider as _;
+    let trace_layer = tracer_provider.as_ref().map(|provider| {
+        tracing_opentelemetry::layer()
+            .with_tracer(provider.tracer("rescueloop"))
+            // Logs keep their existing redaction path. Only explicitly reviewed lifecycle spans
+            // are exported, and tracing events (including error text) never become span events.
+            .with_filter(tracing_subscriber::filter::filter_fn(
+                traces::is_exportable_span,
+            ))
+    });
+    tracing_subscriber::registry()
+        .with(fmt_layer)
+        .with(trace_layer)
         .try_init()
         .map_err(|error| anyhow::anyhow!("cannot initialize operational logging: {error}"))?;
 
@@ -63,7 +80,11 @@ pub fn init(incident_dir: &Path) -> Result<LogGuard> {
         "Operational logging initialized"
     );
     let exporter = export.map(export::spawn);
-    Ok(LogGuard { health, exporter })
+    Ok(LogGuard {
+        health,
+        exporter,
+        tracer_provider,
+    })
 }
 
 impl LogGuard {
@@ -84,6 +105,9 @@ impl Drop for LogGuard {
     fn drop(&mut self) {
         if let Some(exporter) = self.exporter.take() {
             exporter.abort();
+        }
+        if let Some(provider) = self.tracer_provider.take() {
+            let _ = provider.shutdown();
         }
     }
 }

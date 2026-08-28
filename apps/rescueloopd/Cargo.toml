@@ -12,6 +12,9 @@ crossterm.workspace = true
 flate2.workspace = true
 futures.workspace = true
 fs2.workspace = true
+opentelemetry.workspace = true
+opentelemetry-otlp.workspace = true
+opentelemetry_sdk.workspace = true
 rescueloop-agent = { path = "../../crates/rescueloop-agent" }
 rescueloop-core = { path = "../../crates/rescueloop-core" }
 rescueloop-ledger = { path = "../../crates/rescueloop-ledger" }
@@ -28,6 +31,7 @@ sha2.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 libc.workspace = true

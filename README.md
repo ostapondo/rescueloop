@@ -213,6 +213,27 @@ while retaining the origin events and latest activity. It contains no raw artifa
 arguments, working directories, provider errors, or other private evidence. MCP remains additive,
 local-stdio-only, read-only, bounded, and redacted; it cannot approve or execute repairs.
 
+## Correlation and tracing
+
+RescueLoop assigns typed local UUIDs to every lifecycle scope: `observation_id`, `incident_id`,
+`occurrence_id`, `analysis_id`, `plan_id`, `repair_transaction_id`, and `verification_id`.
+Observation, incident, and occurrence IDs are stored with incident and journal data; analysis and
+plan IDs are stored in the validated analysis document; repair and verification IDs are stored with
+the typed transaction or receipt. The hash-chained timeline links the applicable IDs at every stage,
+and structured operational logs use the same identifiers. Older documents remain readable through
+stable incident-scope fallbacks and optional additive fields. Analysis request schema version 3 adds
+the locally generated `analysis_id`; IDs returned by a model are never trusted and are replaced
+locally.
+
+Tracing is off by default. To explicitly export a small allowlist of lifecycle spans over OTLP/HTTP,
+set `RESCUELOOP_OTLP_TRACES_ENDPOINT` to an `http://` or `https://` collector `/v1/traces`
+endpoint. The exporter has a 1,024-span queue, batches at most 128 spans, waits at most 10 seconds
+per export, and shuts down with the process. The endpoint is length-bounded and cannot contain URL
+credentials. RescueLoop does not export tracing events or arbitrary application spans. Exported
+attributes contain only opaque lifecycle IDs, bounded enum-like stage metadata, and provider names;
+raw paths, command arguments, evidence, error text, and model payloads are excluded. This setting
+does not enable metrics export, a Prometheus listener, or any inbound network service.
+
 ## Where it is going
 
 The goal is one local view of what broke, why it broke, and whether it was actually fixed.
