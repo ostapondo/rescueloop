@@ -12,6 +12,9 @@ use tracing::Instrument;
 use crate::{observation_journal, storage};
 
 const MAX_INCIDENT_DOCUMENT_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_READ_ONLY_INCIDENT_DOCUMENTS: usize = 10_000;
+const MAX_READ_ONLY_LEDGER_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_READ_ONLY_LEDGER_ENTRIES: usize = 20_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SaveOutcome {
@@ -54,7 +57,13 @@ async fn load_incidents(dir: &Path, paths: Vec<PathBuf>) -> Result<Vec<(Incident
     }
     // Status changes live in the ledger, not incident JSON.
     // Reconcile them for all readers.
-    if let Ok(entries) = rescueloop_ledger::load(&ledger_path(dir)).await {
+    if let Ok(entries) = rescueloop_ledger::load_bounded(
+        &ledger_path(dir),
+        MAX_READ_ONLY_LEDGER_BYTES,
+        MAX_READ_ONLY_LEDGER_ENTRIES,
+    )
+    .await
+    {
         let latest: std::collections::HashMap<_, _> = entries
             .into_iter()
             .map(|entry| (entry.incident_id, entry.status))
@@ -103,6 +112,10 @@ pub(crate) async fn read_incident_document(path: &Path) -> Result<Incident> {
 }
 
 async fn incident_json_paths(dir: &Path) -> Result<Vec<PathBuf>> {
+    incident_json_paths_with_limit(dir, MAX_READ_ONLY_INCIDENT_DOCUMENTS).await
+}
+
+async fn incident_json_paths_with_limit(dir: &Path, limit: usize) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     let Ok(mut entries) = fs::read_dir(dir).await else {
         return Ok(paths);
@@ -110,6 +123,9 @@ async fn incident_json_paths(dir: &Path) -> Result<Vec<PathBuf>> {
     while let Some(entry) = entries.next_entry().await? {
         let path = entry.path();
         if path.extension().and_then(|value| value.to_str()) == Some("json") {
+            if paths.len() == limit {
+                anyhow::bail!("incident store exceeds the bounded read-only document limit")
+            }
             paths.push(path);
         }
     }

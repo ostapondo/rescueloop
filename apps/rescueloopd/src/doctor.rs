@@ -58,6 +58,29 @@ pub struct DoctorSnapshot {
 }
 
 pub async fn collect(incident_dir: &Path, logs: &LogGuard) -> DoctorSnapshot {
+    collect_internal(incident_dir, logs.write_errors(), logs.export_drops(), true).await
+}
+
+pub(crate) async fn collect_read_only(
+    incident_dir: &Path,
+    local_log_write_errors: u64,
+    local_log_export_drops: u64,
+) -> DoctorSnapshot {
+    collect_internal(
+        incident_dir,
+        local_log_write_errors,
+        local_log_export_drops,
+        false,
+    )
+    .await
+}
+
+async fn collect_internal(
+    incident_dir: &Path,
+    local_log_write_errors: u64,
+    local_log_export_drops: u64,
+    allow_index_rebuild: bool,
+) -> DoctorSnapshot {
     let service = service::snapshot().await.ok();
     let watcher_result = watch_health::load(incident_dir).await;
     let watcher_snapshot_valid = watcher_result.is_ok();
@@ -83,10 +106,17 @@ pub async fn collect(incident_dir: &Path, logs: &LogGuard) -> DoctorSnapshot {
     let incident_count = incidents.as_ref().map_or(0, Vec::len);
     let journal = observation_journal::pending(incident_dir).await;
     let journal_pending = journal.as_ref().map_or(0, Vec::len);
-    let index = incident_store::incident_index(incident_dir).await;
-    let index_count = match &index {
-        Ok(index) => index.count().await.ok(),
-        Err(_) => None,
+    let index_count = if allow_index_rebuild {
+        match incident_store::incident_index(incident_dir).await {
+            Ok(index) => index.count().await.ok(),
+            Err(_) => None,
+        }
+    } else {
+        rescueloop_index::inspect_read_only(incident_dir.parent().unwrap_or(incident_dir))
+            .await
+            .ok()
+            .filter(|health| health.integrity_ok)
+            .map(|health| health.count)
     };
     let ledger = rescueloop_ledger::load_bounded(
         &incident_store::ledger_path(incident_dir),
@@ -96,10 +126,10 @@ pub async fn collect(incident_dir: &Path, logs: &LogGuard) -> DoctorSnapshot {
     .await;
     let background_log_errors = watcher
         .as_ref()
-        .map_or(logs.write_errors(), |value| value.log_write_errors);
+        .map_or(local_log_write_errors, |value| value.log_write_errors);
     let background_export_drops = watcher
         .as_ref()
-        .map_or(logs.export_drops(), |value| value.log_export_drops);
+        .map_or(local_log_export_drops, |value| value.log_export_drops);
     let slo_assertions = crate::slo::evaluate(
         incident_dir,
         watcher.as_ref(),

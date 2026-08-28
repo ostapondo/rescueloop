@@ -159,3 +159,13 @@ async fn rejects_oversized_incident_document_without_allocating_it() {
     );
     fs::remove_dir_all(root).await.unwrap();
 }
+
+#[tokio::test]
+async fn read_only_scan_rejects_an_unbounded_document_set() {
+    let root = std::env::temp_dir().join(format!("rescueloop-store-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&root).await.unwrap();
+    fs::write(root.join("one.json"), b"{}").await.unwrap();
+    fs::write(root.join("two.json"), b"{}").await.unwrap();
+    assert!(incident_json_paths_with_limit(&root, 1).await.is_err());
+    fs::remove_dir_all(root).await.unwrap();
+}
