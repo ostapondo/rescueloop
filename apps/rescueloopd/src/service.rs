@@ -2,6 +2,12 @@ use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use tokio::{fs, process::Command};
 
+#[derive(Clone, Copy, Debug)]
+pub struct ServiceSnapshot {
+    pub installed: bool,
+    pub running: bool,
+}
+
 #[cfg(target_os = "macos")]
 const LABEL: &str = "dev.rescueloop.agent";
 
@@ -258,6 +264,12 @@ async fn is_running() -> Result<bool> {
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     Ok(false)
+}
+
+pub async fn snapshot() -> Result<ServiceSnapshot> {
+    let installed = is_installed()?;
+    let running = installed && is_running().await?;
+    Ok(ServiceSnapshot { installed, running })
 }
 
 #[allow(clippy::needless_return)]
@@ -546,4 +558,15 @@ fn escape_xml_text(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
+}
+
+#[cfg(test)]
+mod health_tests {
+    #[tokio::test]
+    async fn service_snapshot_never_reports_an_uninstalled_watcher_as_running() {
+        let snapshot = super::snapshot()
+            .await
+            .expect("native service status should be readable");
+        assert!(snapshot.installed || !snapshot.running);
+    }
 }

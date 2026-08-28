@@ -52,9 +52,16 @@ struct App {
     analysis: Option<AnalysisResponse>,
     agent_name: String,
     show_history: bool,
+    show_health: bool,
+    health: crate::doctor::DoctorSnapshot,
 }
 
-pub async fn run(dir: PathBuf, endpoint: Option<String>, token: Option<String>) -> Result<()> {
+pub async fn run(
+    dir: PathBuf,
+    endpoint: Option<String>,
+    token: Option<String>,
+    log_guard: &crate::logging::LogGuard,
+) -> Result<()> {
     let provider = configured_provider(&dir, endpoint.clone(), token.clone()).await?;
     let needs_agent_onboarding = provider.is_none() && endpoint.is_none();
     let agent_name = provider
@@ -76,6 +83,8 @@ pub async fn run(dir: PathBuf, endpoint: Option<String>, token: Option<String>) 
         analysis: initial_analysis,
         agent_name,
         show_history: false,
+        show_health: false,
+        health: crate::doctor::collect(&dir, log_guard).await,
     };
     let (sender, mut results) =
         mpsc::unbounded_channel::<(Uuid, Result<AnalysisResponse, String>)>();
@@ -161,6 +170,7 @@ pub async fn run(dir: PathBuf, endpoint: Option<String>, token: Option<String>) 
                     };
                 }
                 app.incidents = refreshed;
+                app.health = crate::doctor::collect(&dir, log_guard).await;
                 last_refresh = Instant::now();
             }
             if !event::poll(Duration::from_millis(100))? {
@@ -327,6 +337,10 @@ pub async fn run(dir: PathBuf, endpoint: Option<String>, token: Option<String>) 
                         "DISMISSED\n\nThis item was marked as not actionable and removed from active issues. It remains available in History.".into(),
                     );
                 }
+                (_, KeyCode::Char('v')) => {
+                    app.show_health = !app.show_health;
+                    app.state = UiState::Ready;
+                }
                 (_, KeyCode::Char('g'))
                     if app.analysis.as_ref().is_some_and(|value| {
                         value.needs_more_evidence && value.proposed_actions.is_empty()
@@ -391,6 +405,7 @@ pub async fn run(dir: PathBuf, endpoint: Option<String>, token: Option<String>) 
                     app.state = UiState::Ready;
                 }
                 (_, KeyCode::Esc) => {
+                    app.show_health = false;
                     app.show_details = false;
                     app.show_repair = false;
                     app.state = UiState::Ready;

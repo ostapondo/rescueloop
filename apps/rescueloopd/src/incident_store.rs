@@ -12,6 +12,13 @@ use crate::{observation_journal, storage};
 
 const MAX_INCIDENT_DOCUMENT_BYTES: u64 = 4 * 1024 * 1024;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SaveOutcome {
+    Created,
+    Grouped,
+    Duplicate,
+}
+
 pub(crate) async fn incidents(dir: &Path) -> Result<Vec<(Incident, PathBuf)>> {
     let paths = match incident_index(dir).await {
         Ok(index) => match index.paths_newest_first().await {
@@ -159,7 +166,10 @@ pub(crate) async fn incident_by_number(dir: &Path, number: &str) -> Result<Incid
     Ok(incident_and_path_by_number(dir, number).await?.0)
 }
 
-pub(crate) async fn save_incident(dir: &Path, incident: &Incident) -> Result<(PathBuf, bool)> {
+pub(crate) async fn save_incident(
+    dir: &Path,
+    incident: &Incident,
+) -> Result<(PathBuf, SaveOutcome)> {
     fs::create_dir_all(dir).await?;
     let _store_lock = acquire_store_lock(dir).await?;
     recover_pending_locked(dir).await?;
@@ -174,7 +184,7 @@ pub(crate) async fn save_incident(dir: &Path, incident: &Incident) -> Result<(Pa
                 incident_id = %incident.id,
                 "Duplicate occurrence ignored"
             );
-            return Ok((path.clone(), false));
+            return Ok((path.clone(), SaveOutcome::Duplicate));
         }
     }
     let journal = observation_journal::begin(dir, incident).await?;
@@ -204,7 +214,7 @@ async fn recover_pending_locked(dir: &Path) -> Result<usize> {
     Ok(count)
 }
 
-async fn apply_observation(dir: &Path, incident: &Incident) -> Result<(PathBuf, bool)> {
+async fn apply_observation(dir: &Path, incident: &Incident) -> Result<(PathBuf, SaveOutcome)> {
     save_occurrence(dir, incident).await?;
     abort_after_occurrence_if_requested();
     let group_key = incident_group_key(incident);
@@ -215,7 +225,7 @@ async fn apply_observation(dir: &Path, incident: &Incident) -> Result<(PathBuf, 
         .find(|(candidate, _)| candidate.last_occurrence_id == Some(incident.id))
     {
         ensure_initial_lineage(dir, existing).await?;
-        return Ok((path.clone(), false));
+        return Ok((path.clone(), SaveOutcome::Duplicate));
     }
     if let Some((mut existing, path)) = candidates.into_iter().find(|(candidate, _)| {
         (candidate.group_key == group_key || incident_group_key(candidate) == group_key)
@@ -250,7 +260,7 @@ async fn apply_observation(dir: &Path, incident: &Incident) -> Result<(PathBuf, 
         {
             tracing::warn!(%error, "incident JSON saved but disposable index update failed");
         }
-        return Ok((path, false));
+        return Ok((path, SaveOutcome::Grouped));
     }
     let mut incident = incident.clone();
     incident.group_key = group_key;
@@ -260,7 +270,7 @@ async fn apply_observation(dir: &Path, incident: &Incident) -> Result<(PathBuf, 
     incident.last_occurrence_id = Some(incident.id);
     let destination = dir.join(format!("{}.json", incident.id));
     if !storage::create_durable(&destination, &serde_json::to_vec_pretty(&incident)?).await? {
-        return Ok((destination, false));
+        return Ok((destination, SaveOutcome::Duplicate));
     }
     tracing::info!(
         event = "incident.created",
@@ -275,7 +285,7 @@ async fn apply_observation(dir: &Path, incident: &Incident) -> Result<(PathBuf, 
         tracing::warn!(%error, "incident JSON saved but disposable index update failed");
     }
     ensure_initial_lineage(dir, &incident).await?;
-    Ok((destination, true))
+    Ok((destination, SaveOutcome::Created))
 }
 
 #[cfg(debug_assertions)]

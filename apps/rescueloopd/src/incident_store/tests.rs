@@ -24,17 +24,17 @@ async fn indexed_grouping_ignores_unrelated_broken_projection() {
     let root = std::env::temp_dir().join(format!("rescueloop-store-{}", uuid::Uuid::new_v4()));
     let directory = root.join("incidents");
     let first = fixture("api", "oom");
-    let (first_path, created) = save_incident(&directory, &first).await.unwrap();
-    assert!(created);
+    let (first_path, outcome) = save_incident(&directory, &first).await.unwrap();
+    assert_eq!(outcome, SaveOutcome::Created);
     let unrelated = fixture("worker", "panic");
-    let (unrelated_path, created) = save_incident(&directory, &unrelated).await.unwrap();
-    assert!(created);
+    let (unrelated_path, outcome) = save_incident(&directory, &unrelated).await.unwrap();
+    assert_eq!(outcome, SaveOutcome::Created);
     fs::write(&unrelated_path, b"broken unrelated JSON")
         .await
         .unwrap();
     let recurrence = fixture("api", "oom");
-    let (grouped_path, created) = save_incident(&directory, &recurrence).await.unwrap();
-    assert!(!created);
+    let (grouped_path, outcome) = save_incident(&directory, &recurrence).await.unwrap();
+    assert_eq!(outcome, SaveOutcome::Grouped);
     assert_eq!(grouped_path, first_path);
     let grouped: Incident = serde_json::from_slice(&fs::read(first_path).await.unwrap()).unwrap();
     assert_eq!(grouped.occurrence_count, 2);
@@ -72,8 +72,8 @@ async fn duplicate_occurrence_is_idempotent() {
     let directory = root.join("incidents");
     let occurrence = fixture("api", "oom");
     save_incident(&directory, &occurrence).await.unwrap();
-    let (_, created) = save_incident(&directory, &occurrence).await.unwrap();
-    assert!(!created);
+    let (_, outcome) = save_incident(&directory, &occurrence).await.unwrap();
+    assert_eq!(outcome, SaveOutcome::Duplicate);
     let stored = incidents(&directory).await.unwrap();
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].0.occurrence_count, 1);
