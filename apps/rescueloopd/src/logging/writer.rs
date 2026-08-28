@@ -151,6 +151,7 @@ impl Drop for EventWriter<'_> {
     fn drop(&mut self) {
         if let Err(error) = self.commit() {
             self.health.write_errors.fetch_add(1, Ordering::Relaxed);
+            crate::metrics::registry().log_write_failed();
             fallback::emergency(&format!("RescueLoop log write failed: {error}"));
         }
     }

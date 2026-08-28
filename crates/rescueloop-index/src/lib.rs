@@ -2,30 +2,58 @@ use anyhow::{Context, Result, bail};
 use rescueloop_core::Incident;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use std::{
+    fmt,
     io::Read,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 const INDEX_SCHEMA: u32 = 1;
 const INDEX_FILENAME: &str = "index-v1.db";
 const MAX_INCIDENT_DOCUMENT_BYTES: u64 = 4 * 1024 * 1024;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct IncidentIndex {
     path: PathBuf,
     incident_dir: PathBuf,
+    rebuild_observer: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl fmt::Debug for IncidentIndex {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("IncidentIndex")
+            .field("path", &self.path)
+            .field("incident_dir", &self.incident_dir)
+            .finish_non_exhaustive()
+    }
 }
 
 impl IncidentIndex {
-    #[tracing::instrument(name = "index.open", skip_all, err)]
     pub async fn open(state_root: &Path, incident_dir: &Path) -> Result<Self> {
+        Self::open_with_rebuild_observer(state_root, incident_dir, || {}).await
+    }
+
+    /// Opens the disposable projection and reports every successful explicit or
+    /// automatic rebuild without coupling the index crate to a metrics backend.
+    #[tracing::instrument(name = "index.open", skip_all, err)]
+    pub async fn open_with_rebuild_observer(
+        state_root: &Path,
+        incident_dir: &Path,
+        rebuild_observer: impl Fn() + Send + Sync + 'static,
+    ) -> Result<Self> {
         let index = Self {
             path: state_root.join(INDEX_FILENAME),
             incident_dir: incident_dir.to_path_buf(),
+            rebuild_observer: Arc::new(rebuild_observer),
         };
         let path = index.path.clone();
         let incident_dir = index.incident_dir.clone();
-        tokio::task::spawn_blocking(move || open_or_rebuild(&path, &incident_dir)).await??;
+        let rebuilt =
+            tokio::task::spawn_blocking(move || open_or_rebuild(&path, &incident_dir)).await??;
+        if rebuilt {
+            (index.rebuild_observer)();
+        }
         Ok(index)
     }
 
@@ -54,8 +82,11 @@ impl IncidentIndex {
     pub async fn paths_newest_first(&self) -> Result<Vec<PathBuf>> {
         let path = self.path.clone();
         let incident_dir = self.incident_dir.clone();
+        let observer = Arc::clone(&self.rebuild_observer);
         tokio::task::spawn_blocking(move || {
-            open_or_rebuild(&path, &incident_dir)?;
+            if open_or_rebuild(&path, &incident_dir)? {
+                observer();
+            }
             let connection = open_connection(&path)?;
             let mut query = connection.prepare(
                 "SELECT json_path FROM incidents ORDER BY last_observed_at DESC, observed_at DESC",
@@ -84,8 +115,11 @@ impl IncidentIndex {
         let path = self.path.clone();
         let incident_dir = self.incident_dir.clone();
         let group_key = group_key.to_owned();
+        let observer = Arc::clone(&self.rebuild_observer);
         tokio::task::spawn_blocking(move || {
-            open_or_rebuild(&path, &incident_dir)?;
+            if open_or_rebuild(&path, &incident_dir)? {
+                observer();
+            }
             let connection = open_connection(&path)?;
             let sql = if include_legacy {
                 "SELECT json_path FROM incidents
@@ -107,7 +141,9 @@ impl IncidentIndex {
     pub async fn rebuild(&self) -> Result<usize> {
         let path = self.path.clone();
         let incident_dir = self.incident_dir.clone();
-        tokio::task::spawn_blocking(move || rebuild(&path, &incident_dir)).await?
+        let count = tokio::task::spawn_blocking(move || rebuild(&path, &incident_dir)).await??;
+        (self.rebuild_observer)();
+        Ok(count)
     }
 
     pub async fn count(&self) -> Result<u64> {
@@ -124,10 +160,10 @@ impl IncidentIndex {
     }
 }
 
-fn open_or_rebuild(path: &Path, incident_dir: &Path) -> Result<()> {
+fn open_or_rebuild(path: &Path, incident_dir: &Path) -> Result<bool> {
     if !path.exists() {
         rebuild(path, incident_dir)?;
-        return Ok(());
+        return Ok(true);
     }
     let healthy = open_connection(path)
         .and_then(|connection| {
@@ -141,7 +177,7 @@ fn open_or_rebuild(path: &Path, incident_dir: &Path) -> Result<()> {
     if !healthy {
         quarantine_broken_index(path)?;
         rebuild(path, incident_dir)?;
-        return Ok(());
+        return Ok(true);
     }
     let connection = open_connection(path)?;
     let indexed_stamp: Option<String> = connection
@@ -154,8 +190,9 @@ fn open_or_rebuild(path: &Path, incident_dir: &Path) -> Result<()> {
     if indexed_stamp.as_deref() != directory_stamp(incident_dir)?.as_deref() {
         drop(connection);
         rebuild(path, incident_dir)?;
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 fn rebuild(path: &Path, incident_dir: &Path) -> Result<usize> {
@@ -323,7 +360,10 @@ fn replace_index(source: &Path, destination: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use rescueloop_core::{Evidence, IncidentKind};
-    use std::collections::BTreeMap;
+    use std::{
+        collections::BTreeMap,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
 
     fn incident(name: &str) -> Incident {
         let mut incident = Incident::detected(
@@ -369,6 +409,35 @@ mod tests {
         assert!(index.paths_newest_first().await.unwrap().is_empty());
         write_incident(&incidents, &incident("later"));
         assert_eq!(index.paths_newest_first().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn observes_every_successful_rebuild_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let incidents = temp.path().join("incidents");
+        std::fs::create_dir_all(&incidents).unwrap();
+        let rebuilds = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&rebuilds);
+        let index = IncidentIndex::open_with_rebuild_observer(temp.path(), &incidents, move || {
+            observed.fetch_add(1, Ordering::Relaxed);
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(rebuilds.load(Ordering::Relaxed), 1);
+        index.paths_newest_first().await.unwrap();
+        assert_eq!(rebuilds.load(Ordering::Relaxed), 1);
+
+        write_incident(&incidents, &incident("later"));
+        index.paths_newest_first().await.unwrap();
+        assert_eq!(rebuilds.load(Ordering::Relaxed), 2);
+
+        index.rebuild().await.unwrap();
+        assert_eq!(rebuilds.load(Ordering::Relaxed), 3);
+
+        std::fs::write(index.path(), b"not sqlite").unwrap();
+        index.paths_newest_first().await.unwrap();
+        assert_eq!(rebuilds.load(Ordering::Relaxed), 4);
     }
 
     #[tokio::test]

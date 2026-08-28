@@ -145,6 +145,9 @@ values locally:
   `repair_duration`, and `verification_duration` retain only count, total, maximum, and latest
   duration in microseconds. They do not retain incident IDs, paths, evidence, or arguments.
 
+`index_rebuild_total` includes explicit rebuilds plus successful automatic recovery when the
+projection is missing, stale, or corrupt. Failed rebuild attempts are not reported as successes.
+
 Metrics reset with the process and are operational hints rather than durable audit history. Incident
 JSON and the lineage ledger remain authoritative. Metric export is disabled: there is no metrics
 socket, Prometheus endpoint, OTLP metrics client, background network task, or implicit environment

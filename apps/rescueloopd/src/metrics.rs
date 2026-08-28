@@ -117,6 +117,10 @@ impl Registry {
         self.update(|metrics| metrics.log_write_failures_total = count);
     }
 
+    pub fn log_write_failed(&self) {
+        self.update(|metrics| increment(&mut metrics.log_write_failures_total));
+    }
+
     pub fn index_rebuilt(&self) {
         self.update(|metrics| increment(&mut metrics.index_rebuild_total));
     }
@@ -200,6 +204,7 @@ mod tests {
         registry.journal_completed();
         registry.rollback();
         registry.set_log_write_failures(2);
+        registry.log_write_failed();
         registry.index_rebuilt();
 
         let snapshot = registry.snapshot();
@@ -209,7 +214,7 @@ mod tests {
         assert_eq!(snapshot.queue_depth, 7);
         assert_eq!(snapshot.journal_pending_count, 3);
         assert_eq!(snapshot.rollback_total, 1);
-        assert_eq!(snapshot.log_write_failures_total, 2);
+        assert_eq!(snapshot.log_write_failures_total, 3);
         assert_eq!(snapshot.index_rebuild_total, 1);
     }
 

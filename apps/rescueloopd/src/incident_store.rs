@@ -112,7 +112,10 @@ async fn incident_json_paths(dir: &Path) -> Result<Vec<PathBuf>> {
 
 pub(crate) async fn incident_index(dir: &Path) -> Result<rescueloop_index::IncidentIndex> {
     let state_root = dir.parent().unwrap_or(dir);
-    rescueloop_index::IncidentIndex::open(state_root, dir).await
+    rescueloop_index::IncidentIndex::open_with_rebuild_observer(state_root, dir, || {
+        crate::metrics::registry().index_rebuilt();
+    })
+    .await
 }
 
 pub(crate) async fn print_incidents(dir: &Path) -> Result<()> {

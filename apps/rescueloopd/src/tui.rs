@@ -246,7 +246,10 @@ pub async fn run(
                     tokio::spawn(async move {
                         let result = if target.as_ref().is_some_and(|target| !target.exists()) {
                             match incident.launch_context.as_ref() {
-                                Some(context) => match rescueloop_platform::verify_replay(context).await {
+                                Some(context) => {
+                                    let _verification_timer = crate::metrics::registry()
+                                        .timer(crate::metrics::DurationKind::Verification);
+                                    match rescueloop_platform::verify_replay(context).await {
                                     Ok(replay) if replay.passed => Ok(
                                         "ALREADY RESOLVED\n\nThe proposed target is already absent and the original action now succeeds. No additional change was needed."
                                             .to_string(),
@@ -258,6 +261,7 @@ pub async fn run(
                                     Err(error) => Err(format!(
                                         "The proposed target is already absent and replay could not be verified: {error}"
                                     )),
+                                    }
                                 },
                                 None => Err(
                                     "The proposed target is already absent. This repair proposal is stale, and the incident has no recorded launch context for verification."
