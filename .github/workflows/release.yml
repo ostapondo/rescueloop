@@ -134,8 +134,6 @@ jobs:
           npm pack ./packaging/npm --dry-run
       - name: Publish npm package
         run: npm publish ./packaging/npm --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Prepare GitHub Packages mirror
         run: |
           cp -R packaging/npm packaging/github-npm
