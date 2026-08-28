@@ -151,6 +151,26 @@ lineage ledger remain the durable sources of truth.
 
 No network listener, Prometheus endpoint, or telemetry export is enabled by this feature.
 
+### Local SLO assertions
+
+The doctor and TUI self-health views evaluate eight local guarantees as `PASS`, `FAIL`, or
+`UNKNOWN`: accepted-observation durability, independent event-source workers, bounded queue
+occupancy, the 30-second graceful-shutdown deadline, SQLite projection rebuildability from
+incident JSON, verification outcome integrity, ledger coverage for terminal repair receipts, and
+the built-in redaction negative probes. `UNKNOWN` is used when an older or inactive watcher has not
+published enough evidence; it is never silently treated as success.
+
+These are local safety assertions rather than a remote uptime promise. The watcher journals an
+observation before accepting it into the bounded queue, isolates sources in cancellable tasks, and
+records the measured duration of each shutdown. Doctor rebuilds a temporary SQLite projection from
+the authoritative JSON and audits the bounded local ledger and repair receipts. Terminal repair
+receipts are published only after their ledger lineage is durable. Redaction probes use synthetic
+sentinels and never read incident evidence or user secrets.
+
+The assertions remain local and add no telemetry, network listener, or MCP tool. They expose
+privileged implementation health in the CLI/TUI only; the existing read-only MCP incident surface
+is unchanged.
+
 ## Local metrics
 
 RescueLoop keeps a typed, process-local metrics registry and includes the watcher's latest bounded

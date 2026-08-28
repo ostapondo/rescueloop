@@ -268,6 +268,15 @@ fn render_doctor(frame: &mut Frame<'_>, app: &App, area: Rect) {
             check.detail
         ));
     }
+    text.push_str("\nLOCAL SLO ASSERTIONS\n");
+    for assertion in &app.health.slo_assertions {
+        text.push_str(&format!(
+            "{:<26} {:<8} {}\n",
+            assertion.kind.label(),
+            assertion.status.label(),
+            assertion.detail
+        ));
+    }
     text.push_str("\nEVENT SOURCES\n");
     if app.health.sources.is_empty() {
         text.push_str("No watcher health snapshot is available yet.\n");
@@ -655,6 +664,11 @@ mod tests {
                     state: crate::doctor::HealthState::Healthy,
                     detail: "running".into(),
                 }],
+                slo_assertions: vec![crate::slo::Assertion {
+                    kind: crate::slo::AssertionKind::QueueBounded,
+                    status: crate::slo::AssertionStatus::Pass,
+                    detail: "depth=0/256".into(),
+                }],
                 sources: Vec::new(),
                 received: 1,
                 persisted: 1,
@@ -700,6 +714,7 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(rendered.contains("COMPONENTS"));
+        assert!(rendered.contains("LOCAL SLO ASSERTIONS"));
         assert!(rendered.contains("EVENT SOURCES"));
         assert!(rendered.contains("PIPELINE"));
 

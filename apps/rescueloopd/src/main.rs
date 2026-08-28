@@ -16,6 +16,7 @@ mod metrics;
 mod observation_journal;
 mod repair_flow;
 mod service;
+mod slo;
 mod storage;
 mod timeline;
 mod tui;

@@ -41,6 +41,7 @@ pub struct DoctorSnapshot {
     pub watcher_uptime_seconds: Option<u64>,
     pub last_shutdown_reason: Option<String>,
     pub checks: Vec<Check>,
+    pub slo_assertions: Vec<crate::slo::Assertion>,
     pub sources: Vec<watch_health::SourceSnapshot>,
     pub received: u64,
     pub persisted: u64,
@@ -90,6 +91,15 @@ pub async fn collect(incident_dir: &Path, logs: &LogGuard) -> DoctorSnapshot {
     let background_export_drops = watcher
         .as_ref()
         .map_or(logs.export_drops(), |value| value.log_export_drops);
+    let slo_assertions = crate::slo::evaluate(
+        incident_dir,
+        watcher.as_ref(),
+        journal.as_ref().ok().map(Vec::len),
+        incidents.as_ref().ok().map(|values| values.len() as u64),
+        index_count,
+        ledger.as_ref().ok().map(Vec::as_slice),
+    )
+    .await;
 
     let mut checks = vec![
         Check {
@@ -185,6 +195,7 @@ pub async fn collect(incident_dir: &Path, logs: &LogGuard) -> DoctorSnapshot {
         }),
         last_shutdown_reason: effective_shutdown_reason(watcher.as_ref(), watcher_running),
         checks,
+        slo_assertions,
         sources,
         received: watcher.as_ref().map_or(0, |value| value.received),
         persisted: watcher.as_ref().map_or(0, |value| value.persisted),
@@ -241,6 +252,15 @@ pub async fn run(incident_dir: &Path, logs: &LogGuard) -> Result<()> {
             check.name,
             check.state.label(),
             check.detail
+        );
+    }
+    println!("\nLOCAL SLO ASSERTIONS");
+    for assertion in &snapshot.slo_assertions {
+        println!(
+            "{:<26} {:<8} {}",
+            assertion.kind.label(),
+            assertion.status.label(),
+            assertion.detail
         );
     }
     println!("\nEVENT SOURCES");
@@ -349,12 +369,18 @@ mod tests {
                 reconnect_count: 0,
                 backoff_ms: 0,
             }],
+            runtime_contract_version: crate::watch_health::RUNTIME_CONTRACT_VERSION,
+            source_workers_isolated: true,
+            accepted: 1,
             received: 1,
             persisted: 1,
             grouped: 0,
             deduplicated: 0,
             queue_depth: 0,
             queue_capacity: 8,
+            queue_overflow_count: 0,
+            shutdown_deadline_ms: 30_000,
+            last_shutdown_duration_ms: Some(25),
             log_write_errors: 0,
             log_export_drops: 0,
             metrics: crate::metrics::MetricsSnapshot::default(),

@@ -486,6 +486,22 @@ fn redact_home(text: &mut String) {
     }
 }
 
+pub(crate) fn redaction_probe() -> (usize, usize) {
+    let sentinels = ["probe-secret-value", "/private/probe/path"];
+    let mut value = serde_json::json!({
+        "authorization": sentinels[0],
+        "artifact_path": sentinels[1],
+        "nested": { "arguments": ["--token", sentinels[0]] }
+    });
+    redact(&mut value, None);
+    let encoded = serde_json::to_string(&value).unwrap_or_default();
+    let passed = sentinels
+        .iter()
+        .filter(|sentinel| !encoded.contains(**sentinel))
+        .count();
+    (passed, sentinels.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
