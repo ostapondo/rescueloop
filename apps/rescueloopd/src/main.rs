@@ -593,3 +593,86 @@ mod cli_tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod timeline_flow_tests {
+    use super::*;
+    use rescueloop_core::{
+        AnalysisError, AnalysisResponse, Evidence, IncidentKind, ProposedAction,
+    };
+    use std::collections::BTreeMap;
+
+    struct FixedProvider;
+
+    #[async_trait::async_trait]
+    impl AnalysisProvider for FixedProvider {
+        fn name(&self) -> &str {
+            "fixture"
+        }
+
+        async fn analyze(
+            &self,
+            _request: &AnalysisRequest,
+        ) -> std::result::Result<AnalysisResponse, AnalysisError> {
+            Ok(AnalysisResponse {
+                summary: "Bounded fixture analysis".into(),
+                hypotheses: Vec::new(),
+                proposed_actions: vec![ProposedAction {
+                    action_type: "restart_service".into(),
+                    reason: "Use the evidence-bound service identifier".into(),
+                    parameters: serde_json::json!({"service_id": "fixture"}),
+                    reversible: true,
+                }],
+                needs_more_evidence: false,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn repeated_analysis_attempts_have_distinct_correlations() {
+        let root = std::env::temp_dir().join(format!("rescueloop-analysis-{}", Uuid::new_v4()));
+        let incident_dir = root.join("incidents");
+        tokio::fs::create_dir_all(&incident_dir).await.unwrap();
+        let incident = Incident::detected(
+            "test",
+            IncidentKind::Crash,
+            "fixture",
+            Evidence {
+                source: "fixture".into(),
+                summary: "fixture".into(),
+                artifact: None,
+                fields: BTreeMap::new(),
+            },
+        );
+        let path = incident_dir.join(format!("{}.json", incident.id));
+        tokio::fs::write(&path, serde_json::to_vec(&incident).unwrap())
+            .await
+            .unwrap();
+        timeline::ensure_initial(&incident_dir, &incident)
+            .await
+            .unwrap();
+        analyze_with_provider(&path, &FixedProvider, None)
+            .await
+            .unwrap();
+        analyze_with_provider(&path, &FixedProvider, None)
+            .await
+            .unwrap();
+        let events = timeline::load(&incident_dir, &incident).await.unwrap();
+        let analyzed = events
+            .iter()
+            .filter(|event| {
+                event.lifecycle_transition == rescueloop_ledger::TimelineTransition::Analyzed
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(analyzed.len(), 2);
+        assert_ne!(analyzed[0].correlation_id, analyzed[1].correlation_id);
+        for event in analyzed {
+            assert!(events.iter().any(|candidate| {
+                candidate.correlation_id == event.correlation_id
+                    && candidate.lifecycle_transition
+                        == rescueloop_ledger::TimelineTransition::PlanProposed
+            }));
+        }
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+}
