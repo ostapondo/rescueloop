@@ -28,7 +28,7 @@ pub struct WriterConfig {
     pub export: Option<ExportSink>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LogHealth {
     write_errors: Arc<AtomicU64>,
     export_drops: Arc<AtomicU64>,

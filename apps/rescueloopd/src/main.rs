@@ -243,7 +243,7 @@ async fn run(cli: Cli, log_guard: &logging::LogGuard) -> Result<()> {
         Some(Command::Timeline { incident, json }) => show_timeline(&incident, json).await,
         Some(Command::Restart) => service::restart().await,
         Some(Command::Uninstall) => service::uninstall().await,
-        Some(Command::Mcp) => mcp::serve(&cli.incident_dir).await,
+        Some(Command::Mcp) => mcp::serve(&cli.incident_dir, log_guard.health()).await,
         Some(Command::Watch) => watcher::run(&cli.incident_dir, log_guard.health()).await,
         Some(Command::Service { action }) => match action {
             ServiceAction::Install => service::install(&cli.incident_dir).await,

@@ -21,5 +21,8 @@ inspector=(npx -y @modelcontextprotocol/inspector@2.4.0 --cli \
 "${inspector[@]}" --method tools/list --strict >/dev/null
 "${inspector[@]}" --method tools/call \
   --tool-name list_incidents --tool-arg limit=5 >/dev/null
+"${inspector[@]}" --method tools/call --tool-name get_agent_health >/dev/null
+"${inspector[@]}" --method tools/call --tool-name list_event_sources >/dev/null
+"${inspector[@]}" --method tools/call --tool-name get_local_metrics_summary >/dev/null
 
 echo "MCP Inspector validation passed."
