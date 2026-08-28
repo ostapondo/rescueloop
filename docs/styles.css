@@ -37,6 +37,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .site-header {
   min-height: 4.25rem;
   width: min(100%, 76rem);
+  margin-inline: auto;
   padding: 0 clamp(1rem, 2.5vw, 2.25rem);
   display: grid;
   grid-template-columns: 1fr auto 1fr;
