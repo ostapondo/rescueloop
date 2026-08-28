@@ -83,6 +83,7 @@ pub struct WatchHealth {
     log_write_errors: AtomicU64,
     log_export_drops: AtomicU64,
     last_shutdown_reason: Mutex<Option<String>>,
+    publish_lock: tokio::sync::Mutex<()>,
 }
 
 impl Default for WatchHealth {
@@ -105,6 +106,7 @@ impl WatchHealth {
             log_write_errors: AtomicU64::new(0),
             log_export_drops: AtomicU64::new(0),
             last_shutdown_reason: Mutex::new(None),
+            publish_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -204,6 +206,15 @@ impl WatchHealth {
             log_write_errors: self.log_write_errors.load(Ordering::Relaxed),
             log_export_drops: self.log_export_drops.load(Ordering::Relaxed),
         }
+    }
+
+    pub async fn publish_to(
+        &self,
+        incident_dir: &Path,
+        shutdown_reason: Option<String>,
+    ) -> Result<()> {
+        let _guard = self.publish_lock.lock().await;
+        publish(incident_dir, &self.snapshot(shutdown_reason)).await
     }
 
     fn update_source(&self, name: &str, update: impl FnOnce(&mut SourceHealth)) {

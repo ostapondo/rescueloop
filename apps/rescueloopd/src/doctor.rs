@@ -48,7 +48,9 @@ pub struct DoctorSnapshot {
 
 pub async fn collect(incident_dir: &Path, logs: &LogGuard) -> DoctorSnapshot {
     let service = service::snapshot().await.ok();
-    let watcher = watch_health::load(incident_dir).await.ok().flatten();
+    let watcher_result = watch_health::load(incident_dir).await;
+    let watcher_snapshot_valid = watcher_result.is_ok();
+    let watcher = watcher_result.ok().flatten();
     let watcher_fresh = watcher.as_ref().is_some_and(|snapshot| {
         Utc::now()
             .signed_duration_since(snapshot.updated_at)
@@ -56,7 +58,9 @@ pub async fn collect(incident_dir: &Path, logs: &LogGuard) -> DoctorSnapshot {
             .is_ok_and(|age| age <= STALE_WATCH_HEALTH)
     });
     let watcher_running = service.is_some_and(|value| value.running);
-    let watcher_state = if watcher_running && watcher_fresh {
+    let watcher_state = if !watcher_snapshot_valid {
+        HealthState::Degraded
+    } else if watcher_running && watcher_fresh {
         HealthState::Healthy
     } else if watcher_running || watcher.is_some() {
         HealthState::Degraded
@@ -85,11 +89,17 @@ pub async fn collect(incident_dir: &Path, logs: &LogGuard) -> DoctorSnapshot {
         Check {
             name: "watcher".into(),
             state: watcher_state,
-            detail: match service {
-                Some(value) if value.running => "native service is running".into(),
-                Some(value) if value.installed => "native service is installed but stopped".into(),
-                Some(_) => "native service is not installed".into(),
-                None => "native service status is unavailable".into(),
+            detail: if !watcher_snapshot_valid {
+                "persisted health snapshot is invalid".into()
+            } else {
+                match service {
+                    Some(value) if value.running => "native service is running".into(),
+                    Some(value) if value.installed => {
+                        "native service is installed but stopped".into()
+                    }
+                    Some(_) => "native service is not installed".into(),
+                    None => "native service status is unavailable".into(),
+                }
             },
         },
         Check {
