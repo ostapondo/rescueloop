@@ -46,6 +46,10 @@ cargo run -p rescueloop -- uninstall
 Lifecycle changes must be checked on the affected native platform because macOS LaunchAgent and
 Windows Task Scheduler behavior cannot be fully validated by cross-platform unit tests.
 
+Self-health changes must keep `watch-health-v1.json` bounded, versioned, atomically replaced, and
+free of paths, arguments, evidence, and secrets. `rescueloop doctor` is local-only; exposing health
+through MCP or a network metrics endpoint requires a separate compatibility and threat-model review.
+
 ### Windows
 
 The same `cargo` commands work on Windows (Rust toolchain via

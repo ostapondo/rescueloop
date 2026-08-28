@@ -74,6 +74,7 @@ The main commands, close to the actual CLI output:
 | `rescueloop start` | Explicitly start the watcher and open the console |
 | `rescueloop stop` | Stop the watcher but keep its background registration |
 | `rescueloop status` | Show whether the watcher is installed and running |
+| `rescueloop doctor` | Explain watcher, event-source, queue, journal, storage, index, ledger, and log-writer health |
 | `rescueloop restart` | Restart the registered watcher |
 | `rescueloop uninstall` | Stop the watcher and remove its background registration |
 | `rescueloop watch` | Run the detector in the current terminal |
@@ -94,6 +95,7 @@ rescueloop run --record-args ./deploy.sh --env prod
 
 # Background watcher lifecycle
 rescueloop status
+rescueloop doctor
 rescueloop stop
 rescueloop start
 
@@ -111,6 +113,20 @@ On Windows, use the same commands from PowerShell with the compiled binary:
 
 `uninstall` removes only the watcher registration. It does not uninstall the `rescueloop`
 executable or delete incident history.
+
+## Self-health
+
+`rescueloop doctor` reads a bounded local health snapshot and answers whether the watcher is
+running, what each event source can currently see, and whether queueing or durable local state is
+degraded. The TUI shows the same summary and refreshes it every two seconds.
+
+The watcher publishes `watch-health-v1.json` atomically inside the private RescueLoop state
+directory. It contains source names, counters, timestamps, queue occupancy, backoff, uptime, and a
+bounded shutdown reason. It never contains raw artifacts, launch arguments, incident evidence,
+tokens, or private paths. The file is a disposable operational projection; incident JSON and the
+lineage ledger remain the durable sources of truth.
+
+No network listener, Prometheus endpoint, or telemetry export is enabled by this feature.
 
 Use `a` to analyze an incident, `r` to review a repair, and `y` to approve it.
 
