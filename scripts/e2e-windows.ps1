@@ -134,8 +134,9 @@ try {
         throw "all concurrent schtasks /Run attempts failed"
     }
     $null = Assert-Health "healthy"
-    & $Binary start
-    if ($LASTEXITCODE -ne 0) { throw "idempotent start failed after the native race" }
+    & $Binary --incident-dir $Incidents service install
+    if ($LASTEXITCODE -ne 0) { throw "active package refresh failed after the native race" }
+    $null = Assert-Health "healthy"
 
     # Force a non-English UI culture; numeric ScheduledTaskState remains stable.
     $LocalizedState = & powershell -NoProfile -NonInteractive -Command "[cultureinfo]::CurrentUICulture=[cultureinfo]'pl-PL'; [int](Get-ScheduledTask -TaskName 'RescueLoop').State"
