@@ -178,6 +178,10 @@ fn render_incidents(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn render_workspace(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    if app.show_timeline {
+        render_timeline(frame, app, area);
+        return;
+    }
     if app.show_health {
         render_doctor(frame, app, area);
         return;
@@ -223,6 +227,35 @@ fn render_workspace(frame: &mut Frame<'_>, app: &App, area: Rect) {
         render_panel(frame, rows[0], " Evidence ", evidence, ACCENT);
         render_analysis_column(frame, analysis, app.show_repair, rows[1]);
     }
+}
+
+fn render_timeline(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let mut text = String::new();
+    if app.timeline.is_empty() {
+        text.push_str("No timeline events are available for this incident.\n");
+    }
+    for event in &app.timeline {
+        text.push_str(&format!(
+            "{}  {:?}  {:?}/{:?}\n  {}\n  correlation={} ledger={}\n",
+            event.timestamp.to_rfc3339(),
+            event.component,
+            event.lifecycle_transition,
+            event.outcome,
+            event.explanation,
+            event.correlation_id,
+            event.ledger_entry_id,
+        ));
+        if let Some(reason) = &event.delay_or_refusal_reason {
+            text.push_str(&format!("  reason: {reason}\n"));
+        }
+    }
+    render_panel(
+        frame,
+        area,
+        " Incident timeline · [T/Esc] Close ",
+        text,
+        ACCENT,
+    );
 }
 
 fn render_doctor(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -436,8 +469,8 @@ fn ready_footer(app: &App, width: u16) -> String {
         "[↑↓] Select", evidence_action, analysis_action, refresh, repair_action
     );
     let second = format!(
-        " {:<17}{:<21}{:<21}{}",
-        "[D] Dismiss", history, "[V] Self-health", "[Q] Disconnect"
+        " {:<17}{:<21}{:<21}{:<21}{}",
+        "[D] Dismiss", history, "[T] Timeline", "[V] Self-health", "[Q] Disconnect"
     );
     if width >= 170 {
         format!("{first}  {second}")
@@ -609,6 +642,8 @@ mod tests {
             agent_name: "fixture-agent".into(),
             show_history: false,
             show_health: false,
+            show_timeline: false,
+            timeline: Vec::new(),
             health: crate::doctor::DoctorSnapshot {
                 version: "0.0.1".into(),
                 watcher_uptime_seconds: Some(10),
@@ -665,5 +700,32 @@ mod tests {
         assert!(rendered.contains("COMPONENTS"));
         assert!(rendered.contains("EVENT SOURCES"));
         assert!(rendered.contains("PIPELINE"));
+
+        app.show_health = false;
+        app.show_timeline = true;
+        app.timeline = vec![crate::timeline::TimelineEvent {
+            timestamp: chrono::Utc::now(),
+            correlation_id: uuid::Uuid::new_v4(),
+            component: rescueloop_ledger::TimelineComponent::Approval,
+            lifecycle_transition: rescueloop_ledger::TimelineTransition::Approved,
+            outcome: rescueloop_ledger::TimelineOutcome::Refused,
+            explanation: "Repair stopped before mutation".into(),
+            ledger_entry_id: uuid::Uuid::new_v4(),
+            delay_or_refusal_reason: Some("explicit local approval was not provided".into()),
+        }];
+        let backend = TestBackend::new(96, 32);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Incident timeline"));
+        assert!(rendered.contains("Repair stopped before mutation"));
+        assert!(rendered.contains("explicit local approval was not provided"));
+        assert!(rendered.contains("ledger="));
     }
 }
