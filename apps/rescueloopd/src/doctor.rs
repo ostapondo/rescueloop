@@ -155,14 +155,7 @@ pub async fn collect(incident_dir: &Path, logs: &LogGuard) -> DoctorSnapshot {
         },
     ];
 
-    let mut sources = watcher
-        .as_ref()
-        .map_or_else(Vec::new, |value| value.sources.clone());
-    if !watcher_fresh || !watcher_running {
-        for source in &mut sources {
-            source.state = watch_health::SourceState::Disconnected;
-        }
-    }
+    let sources = effective_sources(watcher.as_ref(), watcher_fresh, watcher_running);
     checks.sort_by(|left, right| left.name.cmp(&right.name));
 
     DoctorSnapshot {
@@ -174,12 +167,7 @@ pub async fn collect(incident_dir: &Path, logs: &LogGuard) -> DoctorSnapshot {
                 .ok()
                 .map(|duration| duration.as_secs())
         }),
-        last_shutdown_reason: watcher.as_ref().and_then(|snapshot| {
-            snapshot
-                .shutdown_reason
-                .clone()
-                .or_else(|| (!watcher_running).then(|| "abnormal_or_interrupted".into()))
-        }),
+        last_shutdown_reason: effective_shutdown_reason(watcher.as_ref(), watcher_running),
         checks,
         sources,
         received: watcher.as_ref().map_or(0, |value| value.received),
@@ -190,6 +178,32 @@ pub async fn collect(incident_dir: &Path, logs: &LogGuard) -> DoctorSnapshot {
         queue_capacity: watcher.as_ref().map_or(0, |value| value.queue_capacity),
         journal_pending,
     }
+}
+
+fn effective_sources(
+    snapshot: Option<&watch_health::Snapshot>,
+    fresh: bool,
+    running: bool,
+) -> Vec<watch_health::SourceSnapshot> {
+    let mut sources = snapshot.map_or_else(Vec::new, |value| value.sources.clone());
+    if !fresh || !running {
+        for source in &mut sources {
+            source.state = watch_health::SourceState::Disconnected;
+        }
+    }
+    sources
+}
+
+fn effective_shutdown_reason(
+    snapshot: Option<&watch_health::Snapshot>,
+    running: bool,
+) -> Option<String> {
+    snapshot.and_then(|snapshot| {
+        snapshot
+            .shutdown_reason
+            .clone()
+            .or_else(|| (!running).then(|| "abnormal_or_interrupted".into()))
+    })
 }
 
 pub async fn run(incident_dir: &Path, logs: &LogGuard) -> Result<()> {
@@ -243,4 +257,54 @@ pub async fn run(incident_dir: &Path, logs: &LogGuard) -> Result<()> {
             .unwrap_or("none recorded")
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{effective_shutdown_reason, effective_sources};
+    use crate::watch_health::{Snapshot, SourceSnapshot, SourceState, WATCH_HEALTH_SCHEMA_VERSION};
+    use chrono::Utc;
+
+    fn snapshot() -> Snapshot {
+        Snapshot {
+            schema_version: WATCH_HEALTH_SCHEMA_VERSION,
+            version: "fixture".into(),
+            pid: 1,
+            started_at: Utc::now(),
+            updated_at: Utc::now(),
+            shutdown_reason: None,
+            sources: vec![SourceSnapshot {
+                name: "fixture".into(),
+                state: SourceState::Healthy,
+                last_success_at: Some(Utc::now()),
+                received: 1,
+                dropped: 0,
+                deduplicated: 0,
+                reconnect_count: 0,
+                backoff_ms: 0,
+            }],
+            received: 1,
+            persisted: 1,
+            grouped: 0,
+            deduplicated: 0,
+            queue_depth: 0,
+            queue_capacity: 8,
+            log_write_errors: 0,
+            log_export_drops: 0,
+        }
+    }
+
+    #[test]
+    fn stale_sources_disconnect_and_unclosed_runtime_is_abnormal() {
+        let snapshot = snapshot();
+        assert_eq!(
+            effective_sources(Some(&snapshot), false, true)[0].state,
+            SourceState::Disconnected
+        );
+        assert_eq!(
+            effective_shutdown_reason(Some(&snapshot), false).as_deref(),
+            Some("abnormal_or_interrupted")
+        );
+        assert_eq!(effective_shutdown_reason(Some(&snapshot), true), None);
+    }
 }

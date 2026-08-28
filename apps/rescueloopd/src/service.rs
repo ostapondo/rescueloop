@@ -559,3 +559,14 @@ fn escape_xml_text(value: &str) -> String {
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
 }
+
+#[cfg(test)]
+mod health_tests {
+    #[tokio::test]
+    async fn service_snapshot_never_reports_an_uninstalled_watcher_as_running() {
+        let snapshot = super::snapshot()
+            .await
+            .expect("native service status should be readable");
+        assert!(snapshot.installed || !snapshot.running);
+    }
+}
