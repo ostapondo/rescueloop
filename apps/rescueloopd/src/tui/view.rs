@@ -74,10 +74,11 @@ fn render_health(frame: &mut Frame<'_>, app: &App, area: Rect) {
         format!("{}/{}", app.health.queue_depth, app.health.queue_capacity)
     };
     let text = format!(
-        "Watcher: {state}  Sources: {healthy} healthy / {degraded} degraded / {disconnected} disconnected\nQueue: {queue}  Journal backlog: {}  Received: {}  Persisted: {}  Deduplicated: {}",
+        "Watcher: {state}  Sources: {healthy} healthy / {degraded} degraded / {disconnected} disconnected\nQueue: {queue}  Journal: {}  Received: {}  Persisted: {}  Grouped: {}  Deduplicated: {}",
         app.health.journal_pending,
         app.health.received,
         app.health.persisted,
+        app.health.grouped,
         app.health.deduplicated
     );
     frame.render_widget(
@@ -177,6 +178,10 @@ fn render_incidents(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn render_workspace(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    if app.show_health {
+        render_doctor(frame, app, area);
+        return;
+    }
     if let UiState::Message(message) = &app.state {
         render_panel(frame, area, " Status ", message.clone(), Color::Yellow);
         return;
@@ -218,6 +223,50 @@ fn render_workspace(frame: &mut Frame<'_>, app: &App, area: Rect) {
         render_panel(frame, rows[0], " Evidence ", evidence, ACCENT);
         render_analysis_column(frame, analysis, app.show_repair, rows[1]);
     }
+}
+
+fn render_doctor(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let mut text = String::from("COMPONENTS\n");
+    for check in &app.health.checks {
+        text.push_str(&format!(
+            "{:<22} {:<12} {}\n",
+            check.name,
+            check.state.label(),
+            check.detail
+        ));
+    }
+    text.push_str("\nEVENT SOURCES\n");
+    if app.health.sources.is_empty() {
+        text.push_str("No watcher health snapshot is available yet.\n");
+    }
+    for source in &app.health.sources {
+        text.push_str(&format!(
+            "{:<20} {:<12} read={} dropped={} dedup={} reconnects={} backoff={}ms last={}\n",
+            source.name,
+            format!("{:?}", source.state).to_uppercase(),
+            source.received,
+            source.dropped,
+            source.deduplicated,
+            source.reconnect_count,
+            source.backoff_ms,
+            source
+                .last_success_at
+                .map_or_else(|| "never".into(), |value| value.to_rfc3339())
+        ));
+    }
+    text.push_str(&format!(
+        "\nPIPELINE\nqueue={}/{} journal={} received={} persisted={} grouped={} deduplicated={} uptime={} last_shutdown={}",
+        app.health.queue_depth,
+        app.health.queue_capacity,
+        app.health.journal_pending,
+        app.health.received,
+        app.health.persisted,
+        app.health.grouped,
+        app.health.deduplicated,
+        app.health.watcher_uptime_seconds.map_or_else(|| "unknown".into(), |value| format!("{value}s")),
+        app.health.last_shutdown_reason.as_deref().unwrap_or("none recorded")
+    ));
+    render_panel(frame, area, " Self-health · [V/Esc] Close ", text, ACCENT);
 }
 
 fn render_analysis_column(
@@ -367,7 +416,10 @@ fn ready_footer(app: &App, width: u16) -> String {
         " {:<17}{:<29}{:<16}{:<20}{}",
         "[↑↓] Select", evidence_action, analysis_action, refresh, repair_action
     );
-    let second = format!(" {:<17}{:<21}{}", "[D] Dismiss", history, "[Q] Disconnect");
+    let second = format!(
+        " {:<17}{:<21}{:<21}{}",
+        "[D] Dismiss", history, "[V] Self-health", "[Q] Disconnect"
+    );
     if width >= 170 {
         format!("{first}  {second}")
     } else {
@@ -514,7 +566,7 @@ mod tests {
             },
         );
         incident.application = Some("checkout-api".into());
-        let app = App {
+        let mut app = App {
             incidents: vec![(incident, PathBuf::from("incident.json"))],
             selected: 0,
             show_details: true,
@@ -537,6 +589,7 @@ mod tests {
             }),
             agent_name: "fixture-agent".into(),
             show_history: false,
+            show_health: false,
             health: crate::doctor::DoctorSnapshot {
                 version: "0.0.1".into(),
                 watcher_uptime_seconds: Some(10),
@@ -549,6 +602,7 @@ mod tests {
                 sources: Vec::new(),
                 received: 1,
                 persisted: 1,
+                grouped: 0,
                 deduplicated: 0,
                 queue_depth: 0,
                 queue_capacity: 256,
@@ -576,5 +630,20 @@ mod tests {
             assert!(rendered.contains("Collapse evidence"));
             assert!(!rendered.contains("[A] Saved"));
         }
+
+        app.show_health = true;
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("COMPONENTS"));
+        assert!(rendered.contains("EVENT SOURCES"));
+        assert!(rendered.contains("PIPELINE"));
     }
 }

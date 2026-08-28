@@ -52,6 +52,7 @@ struct App {
     analysis: Option<AnalysisResponse>,
     agent_name: String,
     show_history: bool,
+    show_health: bool,
     health: crate::doctor::DoctorSnapshot,
 }
 
@@ -82,6 +83,7 @@ pub async fn run(
         analysis: initial_analysis,
         agent_name,
         show_history: false,
+        show_health: false,
         health: crate::doctor::collect(&dir, log_guard).await,
     };
     let (sender, mut results) =
@@ -335,6 +337,10 @@ pub async fn run(
                         "DISMISSED\n\nThis item was marked as not actionable and removed from active issues. It remains available in History.".into(),
                     );
                 }
+                (_, KeyCode::Char('v')) => {
+                    app.show_health = !app.show_health;
+                    app.state = UiState::Ready;
+                }
                 (_, KeyCode::Char('g'))
                     if app.analysis.as_ref().is_some_and(|value| {
                         value.needs_more_evidence && value.proposed_actions.is_empty()
@@ -399,6 +405,7 @@ pub async fn run(
                     app.state = UiState::Ready;
                 }
                 (_, KeyCode::Esc) => {
+                    app.show_health = false;
                     app.show_details = false;
                     app.show_repair = false;
                     app.state = UiState::Ready;
