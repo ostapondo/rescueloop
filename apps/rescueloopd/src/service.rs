@@ -168,7 +168,7 @@ pub async fn start() -> Result<()> {
             .arg(&plist)
             .status()
             .await?;
-        if !status.success() {
+        if !status.success() && !is_running().await? {
             bail!("launchctl could not start RescueLoop")
         }
         println!("Background watcher started.");
@@ -186,7 +186,7 @@ pub async fn start() -> Result<()> {
             .args(["/Run", "/TN", "RescueLoop"])
             .status()
             .await?;
-        if !status.success() {
+        if !status.success() && !is_running().await? {
             bail!("Windows Task Scheduler could not start RescueLoop")
         }
         println!("Background watcher started.");
@@ -215,7 +215,7 @@ pub async fn stop() -> Result<()> {
             .arg(&plist)
             .status()
             .await?;
-        if !status.success() {
+        if !status.success() && is_running().await? {
             bail!("launchctl could not stop RescueLoop")
         }
         println!("Background watcher stopped. Its registration was kept.");
@@ -235,7 +235,7 @@ pub async fn stop() -> Result<()> {
             .args(["/End", "/TN", "RescueLoop"])
             .status()
             .await?;
-        if !status.success() {
+        if !status.success() && is_running().await? {
             bail!("Windows Task Scheduler could not stop RescueLoop")
         }
         println!("Background watcher stopped. Its registration was kept.");
