@@ -71,6 +71,25 @@ struct GetIncidentOutput {
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
+struct GetIncidentTimelineOutput {
+    #[schemars(transform = remove_format)]
+    schema_version: u16,
+    events: Vec<TimelineEventOutput>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct TimelineEventOutput {
+    timestamp: String,
+    correlation_id: String,
+    component: String,
+    lifecycle_transition: String,
+    outcome: String,
+    explanation: String,
+    ledger_entry_id: String,
+    delay_or_refusal_reason: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
 struct IncidentDetail {
     id: String,
     observed_at: String,
@@ -210,6 +229,53 @@ impl RescueLoopMcp {
                 redacted_fields: packet.evidence_assessment.redacted_fields,
                 retained_evidence: packet.evidence_assessment.retained_evidence,
             },
+        }))
+    }
+
+    #[tool(
+        description = "Get the bounded hash-linked lifecycle timeline for one incident by UUID.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn get_incident_timeline(
+        &self,
+        Parameters(input): Parameters<GetIncidentInput>,
+    ) -> Result<Json<GetIncidentTimelineOutput>, CallToolResult> {
+        let id = Uuid::parse_str(&input.incident_id)
+            .map_err(|_| tool_error("incident_id must be a UUID"))?;
+        let incident = self
+            .read_incidents()
+            .await?
+            .into_iter()
+            .find_map(|(incident, _)| (incident.id == id).then_some(incident))
+            .ok_or_else(|| tool_error("incident not found"))?;
+        let events = crate::timeline::load(&self.incident_dir, &incident)
+            .await
+            .map_err(|error| {
+                tracing::error!(event = "mcp.timeline_read_failed", %error, "MCP timeline read failed");
+                tool_error("the local timeline is unavailable or failed integrity checks")
+            })?
+            .into_iter()
+            .map(|event| TimelineEventOutput {
+                timestamp: event.timestamp.to_rfc3339(),
+                correlation_id: event.correlation_id.to_string(),
+                component: camel_to_snake(&format!("{:?}", event.component)),
+                lifecycle_transition: camel_to_snake(&format!(
+                    "{:?}",
+                    event.lifecycle_transition
+                )),
+                outcome: camel_to_snake(&format!("{:?}", event.outcome)),
+                explanation: event.explanation,
+                ledger_entry_id: event.ledger_entry_id.to_string(),
+                delay_or_refusal_reason: event.delay_or_refusal_reason.unwrap_or_default(),
+            })
+            .collect();
+        Ok(Json(GetIncidentTimelineOutput {
+            schema_version: 1,
+            events,
         }))
     }
 
@@ -361,7 +427,7 @@ mod tests {
     #[test]
     fn exposes_only_read_only_tools() {
         let tools = RescueLoopMcp::tool_router().list_all();
-        assert_eq!(tools.len(), 2);
+        assert_eq!(tools.len(), 3);
         assert!(tools.iter().all(|tool| tool.output_schema.is_some()));
         assert!(tools.iter().all(|tool| {
             tool.annotations
@@ -416,6 +482,32 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing.is_error, Some(true));
+        for incident_id in ["not-a-uuid", "../outside"] {
+            let invalid_timeline = client
+                .call_tool(
+                    CallToolRequestParams::new("get_incident_timeline").with_arguments(
+                        serde_json::Map::from_iter([(
+                            "incident_id".into(),
+                            Value::String(incident_id.into()),
+                        )]),
+                    ),
+                )
+                .await
+                .unwrap();
+            assert_eq!(invalid_timeline.is_error, Some(true));
+        }
+        let missing_timeline = client
+            .call_tool(
+                CallToolRequestParams::new("get_incident_timeline").with_arguments(
+                    serde_json::Map::from_iter([(
+                        "incident_id".into(),
+                        Value::String(Uuid::new_v4().to_string()),
+                    )]),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(missing_timeline.is_error, Some(true));
         client.cancel().await.unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -450,6 +542,9 @@ mod tests {
         )
         .await
         .unwrap();
+        crate::timeline::ensure_initial(&incident_dir, &incident)
+            .await
+            .unwrap();
         let client = connected_server(incident_dir).await.unwrap();
         let listed = client
             .call_tool(CallToolRequestParams::new("list_incidents"))
@@ -478,6 +573,23 @@ mod tests {
         let serialized = serde_json::to_string(&detail).unwrap();
         assert!(!serialized.contains("--token=secret"));
         assert!(!serialized.contains("/Users/alice/private"));
+        let timeline = client
+            .call_tool(
+                CallToolRequestParams::new("get_incident_timeline").with_arguments(
+                    serde_json::Map::from_iter([(
+                        "incident_id".into(),
+                        Value::String(incident.id.to_string()),
+                    )]),
+                ),
+            )
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        let timeline_serialized = serde_json::to_string(&timeline).unwrap();
+        assert!(timeline_serialized.contains("ledger_entry_id"));
+        assert!(!timeline_serialized.contains("/Users/alice"));
+        assert!(!timeline_serialized.contains("secret"));
         assert!(
             !state_root.join("index-v1.db").exists(),
             "read-only MCP calls must not create the disposable index"
