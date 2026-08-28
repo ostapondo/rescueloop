@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b0d0e" />
+    <meta
+      name="description"
+      content="RescueLoop is a local-first recovery agent that detects failures, proposes bounded repairs, and verifies the result."
+    />
+    <meta property="og:title" content="RescueLoop — Local recovery agent" />
+    <meta
+      property="og:description"
+      content="See what broke, review a bounded repair, and prove whether it worked."
+    />
+    <meta property="og:image" content="https://ostapondo.github.io/rescueloop/assets/rescueloop-console.png" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://ostapondo.github.io/rescueloop/" />
+    <title>RescueLoop — Local recovery agent</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="script.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="RescueLoop home">RESCUELOOP</a>
+      <nav aria-label="Main navigation">
+        <a href="#workflow">How it works</a>
+        <a href="#product">Product</a>
+        <a href="#privacy">Privacy</a>
+        <a href="https://github.com/ostapondo/rescueloop">GitHub</a>
+      </nav>
+      <div class="watching"><span aria-hidden="true"></span>STATUS: WATCHING</div>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top">
+        <div class="hero-copy ruled-section">
+          <p class="eyebrow"><span>01</span> Local recovery agent</p>
+          <h1>Your computer breaks.<br /><em>RescueLoop proves the fix.</em></h1>
+          <p class="lede">
+            See what happened, review a bounded repair, and know whether it actually worked.
+            Nothing changes without your approval.
+          </p>
+          <p class="platforms">macOS · Windows · Local-first · No telemetry by default</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="#install">Install RescueLoop</a>
+            <a class="button button-secondary" href="https://github.com/ostapondo/rescueloop">
+              View on GitHub
+            </a>
+          </div>
+          <button class="install-command" type="button" data-copy="npm install --global rescueloop">
+            <code><span aria-hidden="true">$</span> npm install --global rescueloop</code>
+            <span class="copy-label">Copy</span>
+          </button>
+        </div>
+
+        <div class="timeline ruled-section" aria-label="Example incident timeline">
+          <div class="section-heading">
+            <p class="eyebrow"><span>02</span> Incident timeline</p>
+            <p>INCIDENT 7F3C9A12 <strong>RESOLVED</strong></p>
+          </div>
+          <ol>
+            <li class="active">
+              <span class="node"></span><b>OBSERVED</b><time>10:14:22.317</time>
+              <p>process exited unexpectedly</p><small>detector</small>
+            </li>
+            <li class="active">
+              <span class="node"></span><b>NORMALIZED</b><time>10:14:22.438</time>
+              <p>failure classified across sources</p><small>normalizer</small>
+            </li>
+            <li class="active">
+              <span class="node"></span><b>PERSISTED</b><time>10:14:22.652</time>
+              <p>bounded incident stored locally</p><small>store</small>
+            </li>
+            <li class="active">
+              <span class="node"></span><b>ANALYZED</b><time>10:14:23.101</time>
+              <p>safe typed repair proposed</p><small>analyzer</small>
+            </li>
+            <li class="active">
+              <span class="node"></span><b>APPROVED</b><time>10:14:25.884</time>
+              <p>reviewed locally by the user</p><small>approval</small>
+            </li>
+            <li class="active">
+              <span class="node"></span><b>APPLIED</b><time>10:14:26.201</time>
+              <p>reversible transaction applied</p><small>repair</small>
+            </li>
+            <li class="success">
+              <span class="node"></span><b>VERIFIED</b><time>10:14:27.114</time>
+              <p>original action now succeeds</p><small>verifier</small>
+            </li>
+            <li class="success">
+              <span class="node"></span><b>COMMITTED</b><time>10:14:27.532</time>
+              <p>outcome recorded in the ledger</p><small>ledger</small>
+            </li>
+          </ol>
+          <div class="timeline-result">
+            <span>DURATION <b>00:00:05.215</b></span>
+            <span>RESULT <b>VERIFIED</b></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="workflow ruled-section" id="workflow">
+        <p class="eyebrow"><span>03</span> Safety pipeline</p>
+        <div class="pipeline">
+          <article><i>01</i><h2>Detect</h2><p>Watch local signals and system events.</p></article>
+          <article><i>02</i><h2>Explain</h2><p>Keep only bounded, relevant evidence.</p></article>
+          <article><i>03</i><h2>Review</h2><p>Show the exact plan and expected impact.</p></article>
+          <article><i>04</i><h2>Approve</h2><p>You decide what is allowed to change.</p></article>
+          <article><i>05</i><h2>Repair</h2><p>Apply a typed, reversible action.</p></article>
+          <article class="verified"><i>06</i><h2>Verify</h2><p>Replay the failure. Roll back if needed.</p></article>
+        </div>
+      </section>
+
+      <section class="product" id="product">
+        <div class="console-panel ruled-section">
+          <div class="section-heading">
+            <p class="eyebrow"><span>04</span> One local view</p>
+            <p>RESCUELOOP DOCTOR</p>
+          </div>
+          <div class="terminal" role="img" aria-label="RescueLoop terminal showing system health">
+            <div class="terminal-bar"><span>rescueloop</span><span>local:// this-device</span><span>10:14:27</span></div>
+            <div class="terminal-body">
+              <aside><b>› Overview</b><span>Incidents</span><span>Timeline</span><span>Repairs</span><span>Doctor</span></aside>
+              <div class="terminal-content">
+                <h3><span class="healthy-dot"></span> System is healthy</h3>
+                <p>Last incident resolved 12s ago</p>
+                <div class="terminal-stats">
+                  <span>Sources<b>6 / 6</b></span><span>Queue depth<b>0</b></span><span>Journal pending<b>0</b></span>
+                </div>
+                <div class="terminal-log">
+                  <span>10:14</span><p>process failure</p><b>VERIFIED</b>
+                  <span>09:02</span><p>container restart loop</p><b>ROLLED BACK</b>
+                  <span>08:17</span><p>disk I/O timeout</p><b>OBSERVING</b>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="privacy ruled-section" id="privacy">
+          <p class="eyebrow"><span>05</span> Privacy by design</p>
+          <h2>The useful evidence stays close.</h2>
+          <ul>
+            <li><b>Local-first</b><span>Incidents and repair history live on your device.</span></li>
+            <li><b>No telemetry by default</b><span>No analytics, usage tracking, or silent export.</span></li>
+            <li><b>Explicit analysis</b><span>AI is contacted only when you ask for help.</span></li>
+            <li><b>Bounded and redacted</b><span>Private paths, tokens, and raw artifacts stay local.</span></li>
+          </ul>
+          <div class="boundary" aria-label="Privacy boundary diagram">
+            <span>YOUR DEVICE</span><div></div><strong>NO CONNECTION BY DEFAULT</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="install ruled-section" id="install">
+        <p class="eyebrow"><span>06</span> Start watching locally</p>
+        <h2>Recovery you can observe, review, and reverse.</h2>
+        <div class="install-grid">
+          <div><span>01</span><code>npm install --global rescueloop</code></div>
+          <div><span>02</span><code>rescueloop</code></div>
+        </div>
+        <div class="hero-actions">
+          <a class="button button-primary" href="https://github.com/ostapondo/rescueloop#try-it">Read the install guide</a>
+          <a class="button button-secondary" href="https://github.com/ostapondo/rescueloop/blob/main/SECURITY.md">Security model</a>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <a class="brand" href="#top">RESCUELOOP</a>
+      <p>MIT License · Built in the open</p>
+      <div><a href="https://github.com/ostapondo/rescueloop">GitHub</a><a href="https://github.com/ostapondo/rescueloop/blob/main/ROADMAP.md">Roadmap</a></div>
+    </footer>
+  </body>
+</html>

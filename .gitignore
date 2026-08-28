@@ -21,6 +21,4 @@
 Thumbs.db
 Desktop.ini
 
-# Local documentation directory is intentionally not versioned
-/docs/
-
+# GitHub Pages source is versioned under /docs.
