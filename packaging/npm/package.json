@@ -1,0 +1,22 @@
+{
+  "name": "rescueloop",
+  "version": "0.0.1",
+  "description": "Local-first recovery agent for macOS and Windows",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ostapondo/rescueloop.git"
+  },
+  "homepage": "https://github.com/ostapondo/rescueloop#readme",
+  "bugs": "https://github.com/ostapondo/rescueloop/issues",
+  "bin": {
+    "rescueloop": "bin/rescueloop.js"
+  },
+  "files": [
+    "bin",
+    "native"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

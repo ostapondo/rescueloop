@@ -8,6 +8,7 @@ const requestedVersion = checking ? args[1] : args[0];
 const files = {
   cargo: "Cargo.toml",
   lock: "Cargo.lock",
+  npm: "packaging/npm/package.json",
   homebrew: "packaging/homebrew/rescueloop.rb",
   releaseWorkflow: ".github/workflows/release.yml",
   wingetVersion: "packaging/winget/RescueLoop.version.yaml",
@@ -70,6 +71,7 @@ if (!checking) {
   writeFileSync(files.lock, lock);
 
   replaceRequired(files.homebrew, /(^  version ")[^"]+("$)/m, `$1${requestedVersion}$2`);
+  replaceRequired(files.npm, /(^  "version": ")[^"]+("[,]?$)/m, `$1${requestedVersion}$2`);
   replaceRequired(
     files.releaseWorkflow,
     /(^        default: ")[^"]+("$)/m,
@@ -89,6 +91,11 @@ const version = workspaceVersion();
 if (!semver.test(version)) throw new Error(`invalid workspace version: ${version}`);
 if (requestedVersion) assertEqual("requested release", version, requestedVersion);
 
+assertEqual(
+  "npm package",
+  readRequired(files.npm, /^  "version": "([^"]+)"[,]?$/m),
+  version,
+);
 assertEqual(
   "Homebrew formula",
   readRequired(files.homebrew, /^  version "([^"]+)"$/m),

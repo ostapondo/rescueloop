@@ -47,23 +47,36 @@ cd rescueloop
 cargo run -p rescueloop
 ```
 
-The first run detects supported AI agents and walks you through setup automatically.
-
-Install the background watcher when you want RescueLoop to start automatically:
+Or install the published CLI package with npm:
 
 ```sh
-cargo build --release -p rescueloop
-target/release/rescueloop service install
-target/release/rescueloop service status
+npm install --global rescueloop
+rescueloop
 ```
 
+The first run starts the background watcher and opens the interactive console. Closing the console
+leaves detection running in the background. On macOS this uses LaunchAgent; on Windows it uses Task
+Scheduler.
+
+The first run also detects supported AI agents and walks you through setup automatically.
+
 ## CLI reference
+
+For foreground diagnostics, `rescueloop watch` runs the detector in the current terminal without
+opening the console. The advanced `rescueloop service ...` commands remain available for explicit
+per-user or system-level service installation.
 
 The main commands, close to the actual CLI output:
 
 | Command | What it does |
 | --- | --- |
-| `rescueloop` | Open the interactive incident console |
+| `rescueloop` | Ensure the watcher is running and open the interactive incident console |
+| `rescueloop start` | Explicitly start the watcher and open the console |
+| `rescueloop stop` | Stop the watcher but keep its background registration |
+| `rescueloop status` | Show whether the watcher is installed and running |
+| `rescueloop restart` | Restart the registered watcher |
+| `rescueloop uninstall` | Stop the watcher and remove its background registration |
+| `rescueloop watch` | Run the detector in the current terminal |
 | `rescueloop run --record-args <cmd> [args...]` | Supervise a command and save an incident when it fails |
 | `rescueloop service install` | Install the background watcher service |
 | `rescueloop service status` | Show the background service status |
@@ -79,9 +92,10 @@ rescueloop
 # Supervise a command (args recorded only with --record-args)
 rescueloop run --record-args ./deploy.sh --env prod
 
-# Background service
-rescueloop service install
-rescueloop service status
+# Background watcher lifecycle
+rescueloop status
+rescueloop stop
+rescueloop start
 
 # MCP server (read-only incident access)
 rescueloop --incident-dir /absolute/path/to/.rescueloop/incidents mcp
@@ -90,9 +104,13 @@ rescueloop --incident-dir /absolute/path/to/.rescueloop/incidents mcp
 On Windows, use the same commands from PowerShell with the compiled binary:
 
 ```powershell
-.\target\release\rescueloop.exe service install
+.\target\release\rescueloop.exe start
+.\target\release\rescueloop.exe status
 .\target\release\rescueloop.exe --incident-dir C:\absolute\path\.rescueloop\incidents mcp
 ```
+
+`uninstall` removes only the watcher registration. It does not uninstall the `rescueloop`
+executable or delete incident history.
 
 Use `a` to analyze an incident, `r` to review a repair, and `y` to approve it.
 
