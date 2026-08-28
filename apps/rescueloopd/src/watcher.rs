@@ -243,7 +243,7 @@ async fn run_source(
         source = source.name(),
         "Event source started"
     );
-    let mut retry_delay = Duration::from_secs(2);
+    let mut retry_delay = initial_retry_delay();
     let mut degraded = false;
     loop {
         let result = tokio::select! {
@@ -260,7 +260,7 @@ async fn run_source(
                     );
                     degraded = false;
                 }
-                retry_delay = Duration::from_secs(2);
+                retry_delay = initial_retry_delay();
                 info!(event = "observation.received", source = source.name(), observation_id = %incident.observation_id(), incident_id = %incident.incident_id(), occurrence_id = %incident.occurrence_id(), kind = ?incident.kind, "Failure observation received");
                 health.observation_received(&source_name);
                 registry().event_received(EventSource::from_name(&source_name));
@@ -323,6 +323,13 @@ async fn run_source(
     );
 }
 
+fn initial_retry_delay() -> Duration {
+    #[cfg(test)]
+    return Duration::from_millis(10);
+    #[cfg(not(test))]
+    Duration::from_secs(2)
+}
+
 async fn persist(
     directory: &Path,
     source: &str,
@@ -363,6 +370,138 @@ async fn persist(
         destination.display()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod source_runtime_tests {
+    use super::*;
+    use crate::observation_journal;
+    use async_trait::async_trait;
+    use rescueloop_core::{Evidence, IncidentKind};
+    use std::collections::{BTreeMap, VecDeque};
+
+    struct ScriptedSource {
+        outcomes: VecDeque<anyhow::Result<Incident>>,
+    }
+
+    #[async_trait]
+    impl IncidentCollector for ScriptedSource {
+        fn name(&self) -> &str {
+            "scripted"
+        }
+
+        async fn next_incident(&mut self) -> anyhow::Result<Incident> {
+            self.outcomes
+                .pop_front()
+                .unwrap_or_else(|| Err(anyhow::anyhow!("disconnected")))
+        }
+    }
+
+    fn incident(message: &str) -> Incident {
+        Incident::detected(
+            "scripted",
+            IncidentKind::Crash,
+            message,
+            Evidence {
+                source: "scripted".into(),
+                summary: message.into(),
+                artifact: None,
+                fields: BTreeMap::new(),
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn disconnected_source_reconnects_without_losing_the_next_observation() {
+        let root = std::env::temp_dir().join(format!("rescueloop-source-{}", uuid::Uuid::new_v4()));
+        let incidents = root.join("incidents");
+        let source = ScriptedSource {
+            outcomes: VecDeque::from([
+                Err(anyhow::anyhow!("temporary disconnect")),
+                Ok(incident("recovered")),
+            ]),
+        };
+        let (sender, mut receiver) = mpsc::channel(1);
+        let health = Arc::new(WatchHealth::new(1));
+        let cancellation = CancellationToken::new();
+        let task = tokio::spawn(run_source(
+            Box::new(source),
+            sender,
+            Arc::clone(&health),
+            cancellation.clone(),
+            incidents.clone(),
+        ));
+
+        let (_, received) = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(received.message, "recovered");
+        let snapshot = health.snapshot(None);
+        assert!(snapshot.sources[0].reconnect_count >= 1);
+        assert_eq!(snapshot.received, 1);
+        assert_eq!(snapshot.accepted, 1);
+        assert_eq!(
+            observation_journal::pending(&incidents)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        cancellation.cancel();
+        task.await.unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn full_queue_keeps_every_received_observation_in_the_durable_journal() {
+        let root = std::env::temp_dir().join(format!("rescueloop-queue-{}", uuid::Uuid::new_v4()));
+        let incidents = root.join("incidents");
+        let source = ScriptedSource {
+            outcomes: VecDeque::from([Ok(incident("first")), Ok(incident("second"))]),
+        };
+        let (sender, _receiver) = mpsc::channel(1);
+        let health = Arc::new(WatchHealth::new(1));
+        let cancellation = CancellationToken::new();
+        let task = tokio::spawn(run_source(
+            Box::new(source),
+            sender,
+            Arc::clone(&health),
+            cancellation.clone(),
+            incidents.clone(),
+        ));
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if health.snapshot(None).received >= 2
+                    && observation_journal::pending(&incidents)
+                        .await
+                        .is_ok_and(|pending| pending.len() == 2)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let snapshot = health.snapshot(None);
+        assert_eq!(snapshot.queue_depth, 1);
+        assert_eq!(snapshot.queue_capacity, 1);
+        assert_eq!(snapshot.accepted, 1);
+        assert_eq!(
+            observation_journal::pending(&incidents)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+
+        cancellation.cancel();
+        task.await.unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg(unix)]
