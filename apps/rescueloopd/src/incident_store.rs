@@ -316,6 +316,7 @@ async fn ensure_initial_lineage(dir: &Path, incident: &Incident) -> Result<()> {
             verifier: None,
             status: incident.status.clone(),
             relation_override: None,
+            timeline: None,
         },
     )
     .await?;
@@ -462,6 +463,7 @@ pub(crate) async fn record_incident_status(
             verifier: None,
             status,
             relation_override: None,
+            timeline: None,
         },
     )
     .await?;
