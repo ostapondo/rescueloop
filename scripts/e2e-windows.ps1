@@ -96,7 +96,11 @@ try {
         throw "scheduled task has no logon trigger"
     }
     $StableBinary = Join-Path $env:LOCALAPPDATA "RescueLoop/bin/rescueloop.exe"
-    if ($Task.Actions[0].Execute -ne $StableBinary) { throw "scheduled task points into a replaceable package directory" }
+    $RegisteredBinary = [IO.Path]::GetFullPath($Task.Actions[0].Execute.Trim('"'))
+    $ExpectedBinary = [IO.Path]::GetFullPath($StableBinary)
+    if ($RegisteredBinary -ne $ExpectedBinary) {
+        throw "scheduled task points into a replaceable package directory: $RegisteredBinary"
+    }
     Remove-Item -Recurse -Force (Join-Path $Root "node_modules")
     & $StableBinary restart
     if ($LASTEXITCODE -ne 0) { throw "watcher could not restart after package replacement" }
