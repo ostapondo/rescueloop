@@ -254,16 +254,24 @@ async fn is_running() -> Result<bool> {
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                "(Get-ScheduledTask -TaskName 'RescueLoop' -ErrorAction SilentlyContinue).State",
+                "$task=Get-ScheduledTask -TaskName 'RescueLoop' -ErrorAction SilentlyContinue; if($null -ne $task){ [int]$task.State }",
             ])
             .output()
             .await?;
-        return Ok(
-            output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "Running"
-        );
+        return Ok(output.status.success() && windows_task_state_is_running(&output.stdout));
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     Ok(false)
+}
+
+#[cfg(any(test, target_os = "windows"))]
+fn windows_task_state_is_running(output: &[u8]) -> bool {
+    // ScheduledTaskState.Running is numeric value 4. Numeric output is stable
+    // across localized PowerShell installations, unlike the enum's display name.
+    std::str::from_utf8(output)
+        .ok()
+        .and_then(|value| value.trim().parse::<u8>().ok())
+        == Some(4)
 }
 
 pub async fn snapshot() -> Result<ServiceSnapshot> {
@@ -568,5 +576,13 @@ mod health_tests {
             .await
             .expect("native service status should be readable");
         assert!(snapshot.installed || !snapshot.running);
+    }
+
+    #[test]
+    fn windows_running_state_is_locale_independent_numeric_output() {
+        assert!(super::windows_task_state_is_running(b"4\r\n"));
+        assert!(!super::windows_task_state_is_running(b"Running\r\n"));
+        assert!(!super::windows_task_state_is_running(b"En cours\r\n"));
+        assert!(!super::windows_task_state_is_running(b"3\r\n"));
     }
 }

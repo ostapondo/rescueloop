@@ -281,8 +281,12 @@ fn effective_shutdown_reason(
     })
 }
 
-pub async fn run(incident_dir: &Path, logs: &LogGuard) -> Result<()> {
+pub async fn run(incident_dir: &Path, logs: &LogGuard, json: bool) -> Result<()> {
     let snapshot = collect(incident_dir, logs).await;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&snapshot)?);
+        return Ok(());
+    }
     println!("RescueLoop {} self-health", snapshot.version);
     println!("\nCOMPONENTS");
     for check in &snapshot.checks {
