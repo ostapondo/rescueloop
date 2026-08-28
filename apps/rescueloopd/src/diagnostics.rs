@@ -414,10 +414,7 @@ fn redact_text(text: &str) -> String {
         .map(|part| {
             let trimmed = part.trim_matches(|character: char| "'\"()[]{}<>,.;".contains(character));
             let assigned = trimmed.split_once('=').map_or(trimmed, |(_, value)| value);
-            if Path::new(assigned).is_absolute()
-                || is_windows_absolute(assigned)
-                || assigned.starts_with("file://")
-            {
+            if is_platform_neutral_absolute(assigned) || assigned.starts_with("file://") {
                 "<PATH>"
             } else if assigned.contains("://") {
                 "<URL>"
@@ -427,6 +424,10 @@ fn redact_text(text: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn is_platform_neutral_absolute(value: &str) -> bool {
+    value.starts_with('/') || is_windows_absolute(value)
 }
 
 fn is_windows_absolute(value: &str) -> bool {
