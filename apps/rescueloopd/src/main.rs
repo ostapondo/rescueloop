@@ -653,6 +653,13 @@ mod cli_tests {
     }
 
     #[test]
+    fn parses_machine_readable_doctor_output() {
+        let cli = Cli::try_parse_from(["rescueloop", "doctor", "--json"])
+            .expect("doctor JSON output should parse");
+        assert!(matches!(cli.command, Some(Command::Doctor { json: true })));
+    }
+
+    #[test]
     fn diagnostics_export_requires_an_explicit_write_flag() {
         let preview = Cli::try_parse_from(["rescueloop", "diagnostics", "export"]).unwrap();
         let Some(Command::Diagnostics {
