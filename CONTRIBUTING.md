@@ -34,6 +34,18 @@ and the absence of mutation tools:
 
 Platform-specific and end-to-end checks live in the `scripts/` directory and run in CI.
 
+Running `cargo run -p rescueloop` uses the normal combined startup flow: it registers or starts the
+per-user watcher and opens the TUI. Use `cargo run -p rescueloop -- watch` when you only want a
+foreground watcher during development. Clean up a development registration with:
+
+```sh
+cargo run -p rescueloop -- stop
+cargo run -p rescueloop -- uninstall
+```
+
+Lifecycle changes must be checked on the affected native platform because macOS LaunchAgent and
+Windows Task Scheduler behavior cannot be fully validated by cross-platform unit tests.
+
 ### Windows
 
 The same `cargo` commands work on Windows (Rust toolchain via
