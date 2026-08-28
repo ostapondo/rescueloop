@@ -6,17 +6,17 @@
     <meta name="theme-color" content="#0b0d0e" />
     <meta
       name="description"
-      content="RescueLoop is a local-first recovery agent that detects failures, proposes bounded repairs, and verifies the result."
+      content="RescueLoop watches your computer for errors, explains them, and offers a solution."
     />
-    <meta property="og:title" content="RescueLoop — Local recovery agent" />
+    <meta property="og:title" content="RescueLoop: find system errors and get a fix" />
     <meta
       property="og:description"
-      content="See what broke, review a bounded repair, and prove whether it worked."
+      content="Watch for errors across your system, see what happened, and get a suggested fix."
     />
     <meta property="og:image" content="https://ostapondo.github.io/rescueloop/assets/rescueloop-console.png" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://ostapondo.github.io/rescueloop/" />
-    <title>RescueLoop — Local recovery agent</title>
+    <title>RescueLoop: find system errors and get a fix</title>
     <link rel="stylesheet" href="styles.css" />
     <script src="script.js" defer></script>
   </head>
@@ -37,11 +37,11 @@
     <main id="main">
       <section class="hero" id="top">
         <div class="hero-copy ruled-section">
-          <p class="eyebrow"><span>01</span> Local recovery agent</p>
-          <h1>Your computer breaks.<br /><em>RescueLoop proves the fix.</em></h1>
+          <p class="eyebrow"><span>01</span> System errors. Clear fixes.</p>
+          <h1>See what broke.<br /><em>Get a fix.</em></h1>
           <p class="lede">
-            See what happened, review a bounded repair, and know whether it actually worked.
-            Nothing changes without your approval.
+            RescueLoop watches for errors across your system. When it finds one, it explains what
+            happened and offers a solution. You choose whether to apply it.
           </p>
           <p class="platforms">macOS · Windows · Local-first · No telemetry by default</p>
           <div class="hero-actions">
@@ -58,59 +58,59 @@
 
         <div class="timeline ruled-section" aria-label="Example incident timeline">
           <div class="section-heading">
-            <p class="eyebrow"><span>02</span> Incident timeline</p>
-            <p>INCIDENT 7F3C9A12 <strong>RESOLVED</strong></p>
+            <p class="eyebrow"><span>02</span> One problem, step by step</p>
+            <p>PROBLEM 7F3C9A12 <strong>FIXED</strong></p>
           </div>
           <ol>
             <li class="active">
-              <span class="node"></span><b>OBSERVED</b><time>10:14:22.317</time>
-              <p>process exited unexpectedly</p><small>detector</small>
+              <span class="node"></span><b>PROBLEM SEEN</b><time>10:14:22.317</time>
+              <p>the app stopped unexpectedly</p><small>watcher</small>
             </li>
             <li class="active">
-              <span class="node"></span><b>NORMALIZED</b><time>10:14:22.438</time>
-              <p>failure classified across sources</p><small>normalizer</small>
+              <span class="node"></span><b>CLUES FOUND</b><time>10:14:22.438</time>
+              <p>related events collected</p><small>evidence</small>
             </li>
             <li class="active">
-              <span class="node"></span><b>PERSISTED</b><time>10:14:22.652</time>
-              <p>bounded incident stored locally</p><small>store</small>
+              <span class="node"></span><b>SAVED LOCALLY</b><time>10:14:22.652</time>
+              <p>the problem history stays here</p><small>history</small>
             </li>
             <li class="active">
-              <span class="node"></span><b>ANALYZED</b><time>10:14:23.101</time>
-              <p>safe typed repair proposed</p><small>analyzer</small>
+              <span class="node"></span><b>CAUSE FOUND</b><time>10:14:23.101</time>
+              <p>a configuration value was wrong</p><small>analysis</small>
             </li>
             <li class="active">
-              <span class="node"></span><b>APPROVED</b><time>10:14:25.884</time>
-              <p>reviewed locally by the user</p><small>approval</small>
+              <span class="node"></span><b>YOU APPROVED</b><time>10:14:25.884</time>
+              <p>you reviewed the exact change</p><small>permission</small>
             </li>
             <li class="active">
-              <span class="node"></span><b>APPLIED</b><time>10:14:26.201</time>
-              <p>reversible transaction applied</p><small>repair</small>
+              <span class="node"></span><b>FIX APPLIED</b><time>10:14:26.201</time>
+              <p>the value was changed safely</p><small>repair</small>
             </li>
             <li class="success">
-              <span class="node"></span><b>VERIFIED</b><time>10:14:27.114</time>
-              <p>original action now succeeds</p><small>verifier</small>
+              <span class="node"></span><b>CHECKED</b><time>10:14:27.114</time>
+              <p>the app starts normally again</p><small>check</small>
             </li>
             <li class="success">
-              <span class="node"></span><b>COMMITTED</b><time>10:14:27.532</time>
-              <p>outcome recorded in the ledger</p><small>ledger</small>
+              <span class="node"></span><b>DONE</b><time>10:14:27.532</time>
+              <p>the result was saved</p><small>history</small>
             </li>
           </ol>
           <div class="timeline-result">
             <span>DURATION <b>00:00:05.215</b></span>
-            <span>RESULT <b>VERIFIED</b></span>
+            <span>RESULT <b>WORKING AGAIN</b></span>
           </div>
         </div>
       </section>
 
       <section class="workflow ruled-section" id="workflow">
-        <p class="eyebrow"><span>03</span> Safety pipeline</p>
+        <p class="eyebrow"><span>03</span> What RescueLoop does</p>
         <div class="pipeline">
-          <article><i>01</i><h2>Detect</h2><p>Watch local signals and system events.</p></article>
-          <article><i>02</i><h2>Explain</h2><p>Keep only bounded, relevant evidence.</p></article>
-          <article><i>03</i><h2>Review</h2><p>Show the exact plan and expected impact.</p></article>
-          <article><i>04</i><h2>Approve</h2><p>You decide what is allowed to change.</p></article>
-          <article><i>05</i><h2>Repair</h2><p>Apply a typed, reversible action.</p></article>
-          <article class="verified"><i>06</i><h2>Verify</h2><p>Replay the failure. Roll back if needed.</p></article>
+          <article><i>01</i><h2>Notice</h2><p>See when an app or service stops working.</p></article>
+          <article><i>02</i><h2>Collect</h2><p>Save only the clues related to the problem.</p></article>
+          <article><i>03</i><h2>Explain</h2><p>Tell you what happened in one place.</p></article>
+          <article><i>04</i><h2>Ask</h2><p>Show the fix and wait for your permission.</p></article>
+          <article><i>05</i><h2>Fix</h2><p>Make one small, known change.</p></article>
+          <article class="verified"><i>06</i><h2>Check</h2><p>Prove it works or put things back.</p></article>
         </div>
       </section>
 
@@ -141,13 +141,13 @@
         </div>
 
         <div class="privacy ruled-section" id="privacy">
-          <p class="eyebrow"><span>05</span> Privacy by design</p>
-          <h2>The useful evidence stays close.</h2>
+          <p class="eyebrow"><span>05</span> Your data stays yours</p>
+          <h2>Your private data stays on your computer.</h2>
           <ul>
-            <li><b>Local-first</b><span>Incidents and repair history live on your device.</span></li>
-            <li><b>No telemetry by default</b><span>No analytics, usage tracking, or silent export.</span></li>
-            <li><b>Explicit analysis</b><span>AI is contacted only when you ask for help.</span></li>
-            <li><b>Bounded and redacted</b><span>Private paths, tokens, and raw artifacts stay local.</span></li>
+            <li><b>Saved here</b><span>Your problems and repair history stay on this device.</span></li>
+            <li><b>No tracking</b><span>RescueLoop does not send usage data in the background.</span></li>
+            <li><b>You choose AI</b><span>An AI is contacted only when you ask for analysis.</span></li>
+            <li><b>Secrets stay private</b><span>Tokens, private paths, and raw files are not sent.</span></li>
           </ul>
           <div class="boundary" aria-label="Privacy boundary diagram">
             <span>YOUR DEVICE</span><div></div><strong>NO CONNECTION BY DEFAULT</strong>
@@ -156,15 +156,15 @@
       </section>
 
       <section class="install ruled-section" id="install">
-        <p class="eyebrow"><span>06</span> Start watching locally</p>
-        <h2>Recovery you can observe, review, and reverse.</h2>
+        <p class="eyebrow"><span>06</span> Try it on your computer</p>
+        <h2>Install RescueLoop.</h2>
         <div class="install-grid">
           <div><span>01</span><code>npm install --global rescueloop</code></div>
           <div><span>02</span><code>rescueloop</code></div>
         </div>
         <div class="hero-actions">
-          <a class="button button-primary" href="https://github.com/ostapondo/rescueloop#try-it">Read the install guide</a>
-          <a class="button button-secondary" href="https://github.com/ostapondo/rescueloop/blob/main/SECURITY.md">Security model</a>
+          <a class="button button-primary" href="https://github.com/ostapondo/rescueloop#try-it">Show me how to install it</a>
+          <a class="button button-secondary" href="https://github.com/ostapondo/rescueloop/blob/main/SECURITY.md">How it stays safe</a>
         </div>
       </section>
     </main>
