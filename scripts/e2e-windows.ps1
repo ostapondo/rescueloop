@@ -124,13 +124,30 @@ try {
     $LocalizedState = & powershell -NoProfile -NonInteractive -Command "[cultureinfo]::CurrentUICulture=[cultureinfo]'pl-PL'; [int](Get-ScheduledTask -TaskName 'RescueLoop').State"
     if ([int]$LocalizedState -ne 4) { throw "localized scheduled task state was not running" }
 
+    $Journal = Join-Path $State "observation-journal"
+    Remove-Item -Recurse -Force $Journal -ErrorAction SilentlyContinue
+    New-Item -ItemType File -Path $Journal | Out-Null
+    & $Binary --incident-dir $Incidents run cmd.exe /c exit 45 2>$null
+    if ($LASTEXITCODE -eq 0) { throw "permission/path failure unexpectedly accepted an observation" }
+    Remove-Item -Force $Journal
+
+    $env:RESCUELOOP_TEST_STORAGE_FAILURE = "capacity"
+    & $Binary --incident-dir $Incidents run cmd.exe /c exit 46 2>$null
+    Remove-Item Env:RESCUELOOP_TEST_STORAGE_FAILURE
+    if ($LASTEXITCODE -eq 0) { throw "storage capacity failure unexpectedly accepted an observation" }
+
+    Add-Content -LiteralPath (Join-Path $State "repair-ledger.jsonl") -Value '{"schema_version":1,"partial"' -NoNewline
+    & $Binary --incident-dir $Incidents run cmd.exe /c exit 47
+    if ($LASTEXITCODE -ne 0) { throw "torn ledger recovery failed" }
+    if (-not (Get-ChildItem $State -Filter "*torn-*")) { throw "torn ledger tail was not quarantined" }
+
     # Corrupt the disposable index, then prove doctor rebuilds it from incident JSON.
     Set-Content -LiteralPath (Join-Path $State "index-v1.db") -Value "not sqlite" -NoNewline
     $Rebuilt = & $Binary --incident-dir $Incidents doctor --json | ConvertFrom-Json
     if (($Rebuilt.checks | Where-Object { $_.name -eq "SQLite projection" }).state -ne "healthy") {
         throw "corrupted index was not rebuilt"
     }
-    if (@(Get-ChildItem $Incidents -Filter *.json).Count -ne 2) {
+    if (@(Get-ChildItem $Incidents -Filter *.json).Count -ne 3) {
         throw "index recovery changed the durable incident count"
     }
     Write-Host "Windows native E2E passed."

@@ -28,4 +28,14 @@ jq -e -s '
   == ["observed", "normalized", "persisted", "grouped"]
 ' "$state_dir/repair-ledger.jsonl" >/dev/null
 
+# A process can be interrupted after writing only part of the final ledger record.
+printf '%s' '{"schema_version":1,"partial"' >>"$state_dir/repair-ledger.jsonl"
+target/debug/rescueloop --incident-dir "$incident_dir" run /usr/bin/false >/dev/null
+find "$state_dir" -name '*torn-*' -type f | grep -q .
+target/debug/rescueloop --incident-dir "$incident_dir" doctor --json >"$state_dir/doctor.json"
+jq -e '
+  ((.checks[] | select(.name == "lineage ledger") | .state) == "healthy")
+  and .received <= (.persisted + .grouped + .deduplicated + .journal_pending)
+' "$state_dir/doctor.json" >/dev/null
+
 echo "Observation crash recovery validation passed."
