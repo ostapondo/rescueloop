@@ -39,6 +39,16 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Start the background watcher if needed, then open the console.
+    Start,
+    /// Stop the background watcher without removing its registration.
+    Stop,
+    /// Show whether the background watcher is installed and running.
+    Status,
+    /// Restart the background watcher.
+    Restart,
+    /// Stop and remove the background watcher registration.
+    Uninstall,
     /// Serve redacted, read-only incident tools over local MCP stdio.
     Mcp,
     /// Monitor OS diagnostic artifacts and persist normalized incidents.
@@ -157,7 +167,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     storage::prepare_state_store(&cli.incident_dir)?;
     let _log_guard = logging::init(&cli.incident_dir)?;
-    let command = cli.command.as_ref().map_or("tui", Command::name);
+    let command = cli.command.as_ref().map_or("start", Command::name);
     info!(
         event = "runtime.started",
         version = env!("CARGO_PKG_VERSION"),
@@ -187,7 +197,14 @@ async fn main() -> Result<()> {
 
 async fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        None => tui::run(cli.incident_dir, None, None).await,
+        None | Some(Command::Start) => {
+            service::ensure_started(&cli.incident_dir).await?;
+            tui::run(cli.incident_dir, None, None).await
+        }
+        Some(Command::Stop) => service::stop().await,
+        Some(Command::Status) => service::status().await,
+        Some(Command::Restart) => service::restart().await,
+        Some(Command::Uninstall) => service::uninstall().await,
         Some(Command::Mcp) => mcp::serve(&cli.incident_dir).await,
         Some(Command::Watch) => watcher::run(&cli.incident_dir).await,
         Some(Command::Service { action }) => match action {
@@ -276,6 +293,11 @@ async fn run(cli: Cli) -> Result<()> {
 impl Command {
     fn name(&self) -> &'static str {
         match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Status => "status",
+            Self::Restart => "restart",
+            Self::Uninstall => "uninstall",
             Self::Mcp => "mcp",
             Self::Watch => "watch",
             Self::Service { .. } => "service",
@@ -408,4 +430,31 @@ pub(crate) async fn analyze_with_provider(
         "Analysis completed"
     );
     Ok(response)
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::{Cli, Command};
+    use clap::Parser;
+
+    #[test]
+    fn no_subcommand_uses_the_combined_start_flow() {
+        let cli = Cli::try_parse_from(["rescueloop"]).expect("default CLI should parse");
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn parses_top_level_watcher_lifecycle_commands() {
+        for (name, expected) in [
+            ("start", "start"),
+            ("stop", "stop"),
+            ("status", "status"),
+            ("restart", "restart"),
+            ("uninstall", "uninstall"),
+        ] {
+            let cli =
+                Cli::try_parse_from(["rescueloop", name]).expect("lifecycle command should parse");
+            assert_eq!(cli.command.as_ref().map(Command::name), Some(expected));
+        }
+    }
 }

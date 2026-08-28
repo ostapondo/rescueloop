@@ -9,6 +9,16 @@ pub async fn install(incident_dir: &Path) -> Result<()> {
     install_using(incident_dir, None).await
 }
 
+/// Ensure the per-user watcher is registered and running. This is intentionally
+/// idempotent so the interactive entry point can call it on every launch.
+pub async fn ensure_started(incident_dir: &Path) -> Result<()> {
+    if is_installed()? {
+        start().await
+    } else {
+        install(incident_dir).await
+    }
+}
+
 pub async fn install_using(incident_dir: &Path, executable: Option<&Path>) -> Result<()> {
     let executable = match executable {
         Some(path) => path.to_path_buf(),
@@ -103,49 +113,160 @@ pub async fn uninstall() -> Result<()> {
 }
 
 #[allow(clippy::needless_return)]
-pub async fn restart_if_installed() -> Result<bool> {
+pub async fn start() -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let plist = macos_plist()?;
         if !plist.exists() {
-            return Ok(false);
+            bail!("background watcher is not installed; run `rescueloop start`")
+        }
+        if is_running().await? {
+            return Ok(());
         }
         let domain = format!("gui/{}", unsafe { libc::getuid() });
-        let _ = Command::new("launchctl")
-            .args(["bootout", &domain])
-            .arg(&plist)
-            .status()
-            .await;
         let status = Command::new("launchctl")
             .args(["bootstrap", &domain])
             .arg(&plist)
             .status()
             .await?;
-        return Ok(status.success());
+        if !status.success() {
+            bail!("launchctl could not start RescueLoop")
+        }
+        println!("Background watcher started.");
+        return Ok(());
     }
     #[cfg(target_os = "windows")]
     {
-        let exists = Command::new("schtasks")
-            .args(["/Query", "/TN", "RescueLoop"])
-            .output()
-            .await?
-            .status
-            .success();
-        if !exists {
-            return Ok(false);
+        if !is_installed()? {
+            bail!("background watcher is not installed; run `rescueloop start`")
         }
-        let _ = Command::new("schtasks")
+        if is_running().await? {
+            return Ok(());
+        }
+        let status = Command::new("schtasks")
+            .args(["/Run", "/TN", "RescueLoop"])
+            .status()
+            .await?;
+        if !status.success() {
+            bail!("Windows Task Scheduler could not start RescueLoop")
+        }
+        println!("Background watcher started.");
+        return Ok(());
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    bail!("background watcher start currently supports macOS and Windows")
+}
+
+#[allow(clippy::needless_return)]
+pub async fn stop() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let plist = macos_plist()?;
+        if !plist.exists() {
+            println!("Background watcher is not installed.");
+            return Ok(());
+        }
+        if !is_running().await? {
+            println!("Background watcher is already stopped.");
+            return Ok(());
+        }
+        let domain = format!("gui/{}", unsafe { libc::getuid() });
+        let status = Command::new("launchctl")
+            .args(["bootout", &domain])
+            .arg(&plist)
+            .status()
+            .await?;
+        if !status.success() {
+            bail!("launchctl could not stop RescueLoop")
+        }
+        println!("Background watcher stopped. Its registration was kept.");
+        return Ok(());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if !is_installed()? {
+            println!("Background watcher is not installed.");
+            return Ok(());
+        }
+        if !is_running().await? {
+            println!("Background watcher is already stopped.");
+            return Ok(());
+        }
+        let status = Command::new("schtasks")
             .args(["/End", "/TN", "RescueLoop"])
             .status()
-            .await;
-        return Ok(Command::new("schtasks")
-            .args(["/Run", "/TN", "RescueLoop"])
+            .await?;
+        if !status.success() {
+            bail!("Windows Task Scheduler could not stop RescueLoop")
+        }
+        println!("Background watcher stopped. Its registration was kept.");
+        return Ok(());
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    bail!("background watcher stop currently supports macOS and Windows")
+}
+
+pub async fn restart() -> Result<()> {
+    if !is_installed()? {
+        bail!("background watcher is not installed; run `rescueloop start`")
+    }
+    stop().await?;
+    start().await
+}
+
+fn is_installed() -> Result<bool> {
+    #[cfg(target_os = "macos")]
+    return Ok(macos_plist()?.exists());
+    #[cfg(target_os = "windows")]
+    return Ok(std::process::Command::new("schtasks")
+        .args(["/Query", "/TN", "RescueLoop"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?
+        .success());
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    Ok(false)
+}
+
+#[allow(clippy::needless_return)]
+async fn is_running() -> Result<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        let service = format!("gui/{}/{}", unsafe { libc::getuid() }, LABEL);
+        return Ok(Command::new("launchctl")
+            .args(["print", &service])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
             .await?
             .success());
     }
+    #[cfg(target_os = "windows")]
+    {
+        let output = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "(Get-ScheduledTask -TaskName 'RescueLoop' -ErrorAction SilentlyContinue).State",
+            ])
+            .output()
+            .await?;
+        return Ok(
+            output.status.success() && String::from_utf8_lossy(&output.stdout).trim() == "Running"
+        );
+    }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     Ok(false)
+}
+
+#[allow(clippy::needless_return)]
+pub async fn restart_if_installed() -> Result<bool> {
+    if !is_installed()? {
+        return Ok(false);
+    }
+    restart().await?;
+    Ok(true)
 }
 
 #[allow(clippy::needless_return)]
@@ -239,13 +360,15 @@ pub async fn status() -> Result<()> {
     {
         let path = macos_plist()?;
         let system_path = PathBuf::from("/Library/LaunchDaemons").join(format!("{LABEL}.plist"));
+        let running = is_running().await?;
         println!(
-            "User watcher: {}\nUser definition: {}\nSystem watcher: {}\nSystem definition: {}",
+            "User watcher: {}\nUser state: {}\nUser definition: {}\nSystem watcher: {}\nSystem definition: {}",
             if path.exists() {
                 "installed"
             } else {
                 "not installed"
             },
+            if running { "running" } else { "stopped" },
             path.display(),
             if system_path.exists() {
                 "installed"
@@ -258,17 +381,16 @@ pub async fn status() -> Result<()> {
     }
     #[cfg(target_os = "windows")]
     {
-        let status = Command::new("schtasks")
-            .args(["/Query", "/TN", "RescueLoop"])
-            .status()
-            .await?;
+        let installed = is_installed()?;
+        let running = installed && is_running().await?;
         println!(
-            "Background watcher: {}",
-            if status.success() {
+            "Background watcher: {}\nState: {}",
+            if installed {
                 "installed"
             } else {
                 "not installed"
-            }
+            },
+            if running { "running" } else { "stopped" },
         );
         return Ok(());
     }
@@ -387,7 +509,14 @@ async fn install_windows(executable: &Path, incident_dir: &Path) -> Result<()> {
     if !status.success() {
         bail!("Windows Task Scheduler could not install RescueLoop")
     }
-    println!("Background watcher installed for the current Windows user.");
+    let status = Command::new("schtasks")
+        .args(["/Run", "/TN", "RescueLoop"])
+        .status()
+        .await?;
+    if !status.success() {
+        bail!("background watcher was installed but Windows Task Scheduler could not start it")
+    }
+    println!("Background watcher installed and started for the current Windows user.");
     Ok(())
 }
 
