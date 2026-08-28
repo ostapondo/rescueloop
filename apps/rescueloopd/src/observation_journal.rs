@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use rescueloop_core::Incident;
+use rescueloop_core::{Incident, IncidentId, ObservationId, OccurrenceId};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncReadExt;
@@ -12,6 +12,12 @@ const MAX_PENDING_TRANSACTIONS: usize = 16;
 #[derive(Serialize, Deserialize)]
 struct PendingObservation {
     schema_version: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    observation_id: Option<ObservationId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    incident_id: Option<IncidentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    occurrence_id: Option<OccurrenceId>,
     incident: Incident,
 }
 
@@ -26,6 +32,9 @@ pub async fn begin(incident_dir: &Path, incident: &Incident) -> Result<PathBuf> 
     let path = directory.join(format!("{}.json", incident.id));
     let value = PendingObservation {
         schema_version: 1,
+        observation_id: Some(incident.observation_id()),
+        incident_id: Some(incident.incident_id()),
+        occurrence_id: Some(incident.occurrence_id()),
         incident: incident.clone(),
     };
     if storage::create_durable(&path, &serde_json::to_vec(&value)?).await? {
@@ -94,6 +103,40 @@ fn journal_directory(incident_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rescueloop_core::{Evidence, IncidentKind};
+    use std::collections::BTreeMap;
+
+    fn fixture() -> Incident {
+        Incident::detected(
+            "test",
+            IncidentKind::Crash,
+            "fixture",
+            Evidence {
+                source: "fixture".into(),
+                summary: "fixture".into(),
+                artifact: None,
+                fields: BTreeMap::new(),
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn journal_persists_explicit_lifecycle_identifiers() {
+        let root =
+            std::env::temp_dir().join(format!("rescueloop-journal-{}", uuid::Uuid::new_v4()));
+        let incidents = root.join("incidents");
+        let incident = fixture();
+        let path = begin(&incidents, &incident).await.unwrap();
+        let json: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(path).await.unwrap()).unwrap();
+        assert_eq!(
+            json["observation_id"],
+            incident.observation_id().to_string()
+        );
+        assert_eq!(json["incident_id"], incident.incident_id().to_string());
+        assert_eq!(json["occurrence_id"], incident.occurrence_id().to_string());
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
 
     #[tokio::test]
     async fn rejects_oversized_pending_transaction() {

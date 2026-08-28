@@ -81,6 +81,13 @@ struct GetIncidentTimelineOutput {
 struct TimelineEventOutput {
     timestamp: String,
     correlation_id: String,
+    observation_id: String,
+    incident_id: String,
+    occurrence_id: String,
+    analysis_id: String,
+    plan_id: String,
+    repair_transaction_id: String,
+    verification_id: String,
     component: String,
     lifecycle_transition: String,
     outcome: String,
@@ -92,6 +99,8 @@ struct TimelineEventOutput {
 #[derive(Debug, Serialize, JsonSchema)]
 struct IncidentDetail {
     id: String,
+    observation_id: String,
+    occurrence_id: String,
     observed_at: String,
     platform: String,
     kind: String,
@@ -262,6 +271,13 @@ impl RescueLoopMcp {
             .map(|event| TimelineEventOutput {
                 timestamp: event.timestamp.to_rfc3339(),
                 correlation_id: event.correlation_id.to_string(),
+                observation_id: event.observation_id.map_or_else(String::new, |id| id.to_string()),
+                incident_id: event.incident_id.map_or_else(String::new, |id| id.to_string()),
+                occurrence_id: event.occurrence_id.map_or_else(String::new, |id| id.to_string()),
+                analysis_id: event.analysis_id.map_or_else(String::new, |id| id.to_string()),
+                plan_id: event.plan_id.map_or_else(String::new, |id| id.to_string()),
+                repair_transaction_id: event.repair_transaction_id.map_or_else(String::new, |id| id.to_string()),
+                verification_id: event.verification_id.map_or_else(String::new, |id| id.to_string()),
                 component: camel_to_snake(&format!("{:?}", event.component)),
                 lifecycle_transition: camel_to_snake(&format!(
                     "{:?}",
@@ -291,6 +307,8 @@ impl RescueLoopMcp {
 
 impl From<rescueloop_core::Incident> for IncidentDetail {
     fn from(incident: rescueloop_core::Incident) -> Self {
+        let observation_id = incident.observation_id().to_string();
+        let occurrence_id = incident.occurrence_id().to_string();
         let launch_executable = incident
             .launch_context
             .as_ref()
@@ -310,6 +328,8 @@ impl From<rescueloop_core::Incident> for IncidentDetail {
             string_map(serde_json::to_value(&incident.normalized_failure).unwrap_or_default());
         Self {
             id: incident.id.to_string(),
+            observation_id,
+            occurrence_id,
             observed_at: incident.observed_at.to_rfc3339(),
             platform: incident.platform,
             kind: camel_to_snake(&format!("{:?}", incident.kind)),
@@ -563,6 +583,14 @@ mod tests {
             .structured_content
             .unwrap();
         assert!(detail.is_object());
+        assert_eq!(
+            detail["incident"]["observation_id"],
+            incident.observation_id().to_string()
+        );
+        assert_eq!(
+            detail["incident"]["occurrence_id"],
+            incident.occurrence_id().to_string()
+        );
         assert!(detail["incident"]["evidence"][0].get("artifact").is_none());
         assert!(
             detail["incident"]["evidence"][0]["fields"]
@@ -588,6 +616,9 @@ mod tests {
             .unwrap();
         let timeline_serialized = serde_json::to_string(&timeline).unwrap();
         assert!(timeline_serialized.contains("ledger_entry_id"));
+        assert!(timeline_serialized.contains(&incident.observation_id().to_string()));
+        assert!(timeline_serialized.contains(&incident.incident_id().to_string()));
+        assert!(timeline_serialized.contains(&incident.occurrence_id().to_string()));
         assert!(!timeline_serialized.contains("/Users/alice"));
         assert!(!timeline_serialized.contains("secret"));
         assert!(

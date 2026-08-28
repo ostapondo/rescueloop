@@ -1,7 +1,10 @@
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use fs2::FileExt;
-use rescueloop_core::{Incident, IncidentStatus};
+use rescueloop_core::{
+    AnalysisId, Incident, IncidentId, IncidentStatus, ObservationId, OccurrenceId, PlanId,
+    RepairTransactionId, VerificationId,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -69,6 +72,20 @@ pub struct NewTimelineEvent {
     pub schema_version: u16,
     pub occurred_at: DateTime<Utc>,
     pub correlation_id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_id: Option<ObservationId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incident_id: Option<IncidentId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence_id: Option<OccurrenceId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_id: Option<AnalysisId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_id: Option<PlanId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair_transaction_id: Option<RepairTransactionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_id: Option<VerificationId>,
     pub component: TimelineComponent,
     pub transition: TimelineTransition,
     pub outcome: TimelineOutcome,
@@ -101,12 +118,26 @@ impl NewTimelineEvent {
             schema_version: 1,
             occurred_at,
             correlation_id,
+            observation_id: None,
+            incident_id: None,
+            occurrence_id: None,
+            analysis_id: None,
+            plan_id: None,
+            repair_transaction_id: None,
+            verification_id: None,
             component,
             transition,
             outcome,
             explanation,
             delay_or_refusal_reason,
         })
+    }
+
+    pub fn with_incident_ids(mut self, incident: &Incident) -> Self {
+        self.observation_id = Some(incident.observation_id());
+        self.incident_id = Some(incident.incident_id());
+        self.occurrence_id = Some(incident.occurrence_id());
+        self
     }
 
     pub fn explanation(&self) -> &str {

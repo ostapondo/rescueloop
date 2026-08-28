@@ -1,10 +1,12 @@
 mod analysis;
+mod identifiers;
 mod incident;
 
 pub use analysis::{
     AnalysisError, AnalysisProvider, AnalysisRequest, AnalysisResponse, EventSource,
     EvidenceAssessment, Hypothesis, IncidentCollector, ProposedAction,
 };
+pub use identifiers::*;
 pub use incident::{
     ApplicationIdentity, Confidence, EnvironmentIdentity, Evidence, Incident, IncidentKind,
     IncidentStatus, LaunchContext, NormalizedFailure,
@@ -60,6 +62,22 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_identifiers_are_stable_and_legacy_incidents_have_fallbacks() {
+        let value = incident();
+        assert_eq!(value.correlation_id(), value.observation_id().as_uuid());
+        assert_eq!(value.incident_id().as_uuid(), value.id);
+        assert_eq!(value.occurrence_id().as_uuid(), value.id);
+
+        let mut json = serde_json::to_value(&value).unwrap();
+        json.as_object_mut().unwrap().remove("observation_id");
+        json.as_object_mut().unwrap().remove("occurrence_id");
+        json.as_object_mut().unwrap().remove("correlation_id");
+        let legacy: Incident = serde_json::from_value(json).unwrap();
+        assert_eq!(legacy.observation_id().as_uuid(), legacy.id);
+        assert_eq!(legacy.occurrence_id().as_uuid(), legacy.id);
+    }
+
+    #[test]
     fn analysis_packet_is_bounded_and_redacted_but_keeps_opaque_target_id() {
         let mut value = incident();
         value.evidence[0]
@@ -77,6 +95,7 @@ mod tests {
             ),
         );
         let request = AnalysisRequest::bounded(value, vec!["restart_container".into()]);
+        assert_eq!(request.schema_version, 3);
         assert!(request.incident.evidence[0].artifact.is_none());
         assert!(
             !request.incident.evidence[0]

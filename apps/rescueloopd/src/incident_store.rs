@@ -7,6 +7,7 @@ use std::{
 };
 use tokio::fs;
 use tokio::io::AsyncReadExt;
+use tracing::Instrument;
 
 use crate::{observation_journal, storage};
 
@@ -174,6 +175,16 @@ pub(crate) async fn incident_by_number(dir: &Path, number: &str) -> Result<Incid
     Ok(incident_and_path_by_number(dir, number).await?.0)
 }
 
+#[tracing::instrument(
+    name = "incident.persist",
+    skip_all,
+    fields(
+        observation_id = %incident.observation_id(),
+        incident_id = %incident.incident_id(),
+        occurrence_id = %incident.occurrence_id()
+    ),
+    err
+)]
 pub(crate) async fn save_incident(
     dir: &Path,
     incident: &Incident,
@@ -225,11 +236,28 @@ async fn recover_pending_locked(dir: &Path) -> Result<usize> {
     Ok(count)
 }
 
+#[tracing::instrument(
+    name = "observation.process",
+    skip_all,
+    fields(
+        observation_id = %incident.observation_id(),
+        incident_id = %incident.incident_id(),
+        occurrence_id = %incident.occurrence_id()
+    ),
+    err
+)]
 async fn apply_observation(dir: &Path, incident: &Incident) -> Result<(PathBuf, SaveOutcome)> {
     save_occurrence(dir, incident).await?;
     abort_after_occurrence_if_requested();
     let group_key = incident_group_key(incident);
-    let grouping = grouping_candidates(dir, &group_key).await?;
+    let grouping = grouping_candidates(dir, &group_key)
+        .instrument(tracing::info_span!(
+            "incident.group",
+            observation_id = %incident.observation_id(),
+            incident_id = %incident.incident_id(),
+            occurrence_id = %incident.occurrence_id(),
+        ))
+        .await?;
     let candidates = grouping.incidents;
     if let Some((existing, path)) = candidates
         .iter()
@@ -271,7 +299,7 @@ async fn apply_observation(dir: &Path, incident: &Incident) -> Result<(PathBuf, 
         {
             tracing::warn!(%error, "incident JSON saved but disposable index update failed");
         }
-        crate::timeline::record(
+        crate::timeline::record_with_ids(
             dir,
             &existing,
             crate::timeline::EventSpec {
@@ -283,6 +311,11 @@ async fn apply_observation(dir: &Path, incident: &Incident) -> Result<(PathBuf, 
                 reason: None,
                 status: existing.status.clone(),
                 occurred_at: incident.observed_at,
+            },
+            crate::timeline::StageIdentifiers {
+                observation_id: Some(incident.observation_id()),
+                occurrence_id: Some(incident.occurrence_id()),
+                ..Default::default()
             },
         )
         .await?;

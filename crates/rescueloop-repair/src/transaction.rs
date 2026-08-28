@@ -1,9 +1,9 @@
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
+use rescueloop_core::{AnalysisId, PlanId, RepairTransactionId, VerificationId};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use uuid::Uuid;
 
 use crate::{RepairAction, RepairPlan, ScopePolicy};
 
@@ -19,7 +19,13 @@ pub enum TransactionState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transaction {
     pub schema_version: u16,
-    pub id: Uuid,
+    pub id: RepairTransactionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_id: Option<AnalysisId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_id: Option<PlanId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_id: Option<VerificationId>,
     pub created_at: DateTime<Utc>,
     pub state: TransactionState,
     pub action: RepairAction,
@@ -36,7 +42,7 @@ pub async fn prepare(
     transaction_root: &Path,
 ) -> Result<Transaction> {
     let original = policy.validate(plan)?;
-    let id = Uuid::new_v4();
+    let id = RepairTransactionId::new();
     let filename = original
         .file_name()
         .context("repair target has no filename")?;
@@ -51,6 +57,9 @@ pub async fn prepare(
     Ok(Transaction {
         schema_version: 1,
         id,
+        analysis_id: None,
+        plan_id: None,
+        verification_id: None,
         created_at: Utc::now(),
         state: TransactionState::Prepared,
         action: plan.action.clone(),
@@ -60,7 +69,7 @@ pub async fn prepare(
     })
 }
 
-#[tracing::instrument(name = "repair.apply", skip(transaction), fields(transaction_id = %transaction.id), err)]
+#[tracing::instrument(name = "repair.apply", skip(transaction), fields(repair_transaction_id = %transaction.id), err)]
 pub async fn apply(transaction: &mut Transaction) -> Result<()> {
     if transaction.state != TransactionState::Prepared {
         bail!("transaction is not prepared")
@@ -113,7 +122,7 @@ pub async fn apply(transaction: &mut Transaction) -> Result<()> {
     Ok(())
 }
 
-#[tracing::instrument(name = "repair.rollback", skip(transaction), fields(transaction_id = %transaction.id), err)]
+#[tracing::instrument(name = "rollback.run", skip(transaction), fields(repair_transaction_id = %transaction.id), err)]
 pub async fn rollback(transaction: &mut Transaction) -> Result<()> {
     if transaction.state != TransactionState::Applied {
         bail!("only an applied transaction can be rolled back")
@@ -156,7 +165,7 @@ pub async fn rollback(transaction: &mut Transaction) -> Result<()> {
     Ok(())
 }
 
-#[tracing::instrument(name = "repair.finalize", skip(transaction), fields(transaction_id = %transaction.id, verification_passed), err)]
+#[tracing::instrument(name = "repair.finalize", skip(transaction), fields(repair_transaction_id = %transaction.id, verification_passed), err)]
 pub async fn finalize(transaction: &mut Transaction, verification_passed: bool) -> Result<()> {
     if transaction.state != TransactionState::Applied {
         bail!("transaction is not applied")

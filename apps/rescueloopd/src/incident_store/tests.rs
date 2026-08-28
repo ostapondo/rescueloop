@@ -44,6 +44,15 @@ async fn indexed_grouping_ignores_unrelated_broken_projection() {
         .find(|event| event.lifecycle_transition == rescueloop_ledger::TimelineTransition::Grouped)
         .unwrap();
     assert_eq!(grouped_event.correlation_id, recurrence.correlation_id());
+    assert_eq!(grouped_event.incident_id, Some(first.incident_id()));
+    assert_eq!(
+        grouped_event.observation_id,
+        Some(recurrence.observation_id())
+    );
+    assert_eq!(
+        grouped_event.occurrence_id,
+        Some(recurrence.occurrence_id())
+    );
     assert_eq!(timeline.len(), 4);
     fs::remove_dir_all(root).await.unwrap();
 }

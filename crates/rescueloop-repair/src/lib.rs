@@ -23,6 +23,7 @@ mod tests {
             reason: "test".into(),
             parameters: json!({"target": target}),
             reversible: true,
+            plan_id: None,
         })
         .unwrap()
     }
@@ -117,6 +118,7 @@ mod tests {
             reason: "fix port".into(),
             parameters: json!({"target": target, "pointer": "/server/port", "value": 8081}),
             reversible: true,
+            plan_id: None,
         };
         let policy = ScopePolicy::new(vec![scope]).unwrap();
         let mut tx = prepare(
@@ -151,6 +153,7 @@ mod tests {
             reason: "make executable".into(),
             parameters: json!({"target":target,"mode":"0755"}),
             reversible: true,
+            plan_id: None,
         };
         let policy = ScopePolicy::new(vec![scope]).unwrap();
         let mut tx = prepare(
