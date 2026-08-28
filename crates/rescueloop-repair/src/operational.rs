@@ -1,7 +1,6 @@
 use anyhow::{Context, Result, bail};
-use rescueloop_core::ProposedAction;
+use rescueloop_core::{AnalysisId, PlanId, ProposedAction, RepairTransactionId, VerificationId};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -17,7 +16,13 @@ pub enum OperationalAction {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationalReceipt {
-    pub id: Uuid,
+    pub id: RepairTransactionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_id: Option<AnalysisId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_id: Option<PlanId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_id: Option<VerificationId>,
     pub action: OperationalAction,
     pub previous_running: bool,
     pub verified: bool,
@@ -51,10 +56,24 @@ pub fn compile_operational(proposal: &ProposedAction) -> Result<Option<Operation
     Ok(Some(action))
 }
 
-#[tracing::instrument(name = "repair.operational", skip(action, allowed_id), err)]
+#[tracing::instrument(
+    name = "repair.operational",
+    skip(action, allowed_id),
+    fields(
+        analysis_id = %analysis_id,
+        plan_id = %plan_id,
+        repair_transaction_id = %repair_transaction_id,
+        verification_id = %verification_id
+    ),
+    err
+)]
 pub async fn execute_operational(
     action: OperationalAction,
     allowed_id: &str,
+    analysis_id: AnalysisId,
+    plan_id: PlanId,
+    repair_transaction_id: RepairTransactionId,
+    verification_id: VerificationId,
 ) -> Result<OperationalReceipt> {
     let id = match &action {
         OperationalAction::RestartContainer { container_id, .. } => container_id,
@@ -90,7 +109,10 @@ pub async fn execute_operational(
                 rolled_back = true;
             }
             Ok(OperationalReceipt {
-                id: Uuid::new_v4(),
+                id: repair_transaction_id,
+                analysis_id: Some(analysis_id),
+                plan_id: Some(plan_id),
+                verification_id: Some(verification_id),
                 action,
                 previous_running,
                 verified,
@@ -98,7 +120,15 @@ pub async fn execute_operational(
             })
         }
         OperationalAction::RestartService { service_id } => {
-            execute_service(action.clone(), service_id).await
+            execute_service(
+                action.clone(),
+                service_id,
+                analysis_id,
+                plan_id,
+                repair_transaction_id,
+                verification_id,
+            )
+            .await
         }
     }
 }
@@ -115,6 +145,10 @@ async fn container_running(engine: &str, id: &str) -> Result<bool> {
 async fn execute_service(
     action: OperationalAction,
     service_id: &str,
+    analysis_id: AnalysisId,
+    plan_id: PlanId,
+    repair_transaction_id: RepairTransactionId,
+    verification_id: VerificationId,
 ) -> Result<OperationalReceipt> {
     #[cfg(target_os = "macos")]
     {
@@ -138,7 +172,10 @@ async fn execute_service(
                 .status
                 .success();
         return Ok(OperationalReceipt {
-            id: Uuid::new_v4(),
+            id: repair_transaction_id,
+            analysis_id: Some(analysis_id),
+            plan_id: Some(plan_id),
+            verification_id: Some(verification_id),
             action,
             previous_running,
             verified,
@@ -167,7 +204,10 @@ async fn execute_service(
             .status()
             .await?;
         return Ok(OperationalReceipt {
-            id: Uuid::new_v4(),
+            id: repair_transaction_id,
+            analysis_id: Some(analysis_id),
+            plan_id: Some(plan_id),
+            verification_id: Some(verification_id),
             action,
             previous_running,
             verified: status.success(),
@@ -176,4 +216,40 @@ async fn execute_service(
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     bail!("service repair supports macOS and Windows")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operational_receipts_preserve_ids_and_accept_legacy_documents() {
+        let receipt = OperationalReceipt {
+            id: RepairTransactionId::new(),
+            analysis_id: Some(AnalysisId::new()),
+            plan_id: Some(PlanId::new()),
+            verification_id: Some(VerificationId::new()),
+            action: OperationalAction::RestartService {
+                service_id: "fixture.service".into(),
+            },
+            previous_running: true,
+            verified: true,
+            rolled_back: false,
+        };
+        let encoded = serde_json::to_value(&receipt).unwrap();
+        let decoded: OperationalReceipt = serde_json::from_value(encoded.clone()).unwrap();
+        assert_eq!(decoded.analysis_id, receipt.analysis_id);
+        assert_eq!(decoded.plan_id, receipt.plan_id);
+        assert_eq!(decoded.verification_id, receipt.verification_id);
+
+        let mut legacy = encoded;
+        let object = legacy.as_object_mut().unwrap();
+        object.remove("analysis_id");
+        object.remove("plan_id");
+        object.remove("verification_id");
+        let decoded: OperationalReceipt = serde_json::from_value(legacy).unwrap();
+        assert!(decoded.analysis_id.is_none());
+        assert!(decoded.plan_id.is_none());
+        assert!(decoded.verification_id.is_none());
+    }
 }

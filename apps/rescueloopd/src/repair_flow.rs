@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use rescueloop_core::Incident;
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use tracing::Instrument;
 use uuid::Uuid;
 
 use crate::incident_store::{ledger_path, record_incident_status};
@@ -63,17 +64,25 @@ async fn repair_impl(
         };
     }
     let incident: Incident = serde_json::from_slice(&fs::read(incident_path).await?)?;
-    let timeline_correlation_id = Uuid::new_v4();
     let analysis: rescueloop_core::AnalysisResponse =
         serde_json::from_slice(&fs::read(analysis_path).await?)?;
     let proposal = analysis
         .proposed_actions
         .get(action_index)
         .context("action index is out of range")?;
+    let analysis_id = analysis.analysis_id.unwrap_or_default();
+    let plan_id = proposal.plan_id.unwrap_or_default();
+    let timeline_correlation_id = plan_id.as_uuid();
+    let mut repair_ids = crate::timeline::StageIdentifiers {
+        analysis_id: Some(analysis_id),
+        plan_id: Some(plan_id),
+        ..Default::default()
+    };
     record_timeline(
         incident_dir,
         &incident,
         timeline_correlation_id,
+        repair_ids,
         rescueloop_ledger::TimelineComponent::Planner,
         rescueloop_ledger::TimelineTransition::PlanProposed,
         rescueloop_ledger::TimelineOutcome::Completed,
@@ -85,6 +94,8 @@ async fn repair_impl(
     tracing::info!(
         event = "repair.planned",
         incident_id = %incident.id,
+        analysis_id = %analysis_id,
+        plan_id = %plan_id,
         action_type = proposal.action_type,
         approved,
         "Repair proposal compiled"
@@ -96,6 +107,7 @@ async fn repair_impl(
                 incident_dir,
                 &incident,
                 timeline_correlation_id,
+                repair_ids,
                 rescueloop_ledger::TimelineComponent::Approval,
                 rescueloop_ledger::TimelineTransition::Approved,
                 rescueloop_ledger::TimelineOutcome::Refused,
@@ -111,6 +123,10 @@ async fn repair_impl(
         let _repair_timer = crate::metrics::registry().timer(crate::metrics::DurationKind::Repair);
         let _verification_timer =
             crate::metrics::registry().timer(crate::metrics::DurationKind::Verification);
+        let verification_id = rescueloop_core::VerificationId::new();
+        repair_ids.verification_id = Some(verification_id);
+        let repair_transaction_id = rescueloop_core::RepairTransactionId::new();
+        repair_ids.repair_transaction_id = Some(repair_transaction_id);
         let target_id = match &action {
             rescueloop_repair::OperationalAction::RestartContainer { container_id, .. } => {
                 container_id.clone()
@@ -130,6 +146,7 @@ async fn repair_impl(
                 incident_dir,
                 &incident,
                 timeline_correlation_id,
+                repair_ids,
                 rescueloop_ledger::TimelineComponent::Approval,
                 rescueloop_ledger::TimelineTransition::Approved,
                 rescueloop_ledger::TimelineOutcome::Refused,
@@ -144,6 +161,7 @@ async fn repair_impl(
             incident_dir,
             &incident,
             timeline_correlation_id,
+            repair_ids,
             rescueloop_ledger::TimelineComponent::Approval,
             rescueloop_ledger::TimelineTransition::Approved,
             rescueloop_ledger::TimelineOutcome::Completed,
@@ -159,13 +177,23 @@ async fn repair_impl(
             None,
         )
         .await?;
-        let receipt = match rescueloop_repair::execute_operational(action, &target_id).await {
+        let receipt = match rescueloop_repair::execute_operational(
+            action,
+            &target_id,
+            analysis_id,
+            plan_id,
+            repair_transaction_id,
+            verification_id,
+        )
+        .await
+        {
             Ok(receipt) => receipt,
             Err(error) => {
                 record_timeline(
                     incident_dir,
                     &incident,
                     timeline_correlation_id,
+                    repair_ids,
                     rescueloop_ledger::TimelineComponent::Repair,
                     rescueloop_ledger::TimelineTransition::Applied,
                     rescueloop_ledger::TimelineOutcome::Failed,
@@ -177,10 +205,12 @@ async fn repair_impl(
                 return Err(error);
             }
         };
+        debug_assert_eq!(receipt.id, repair_transaction_id);
         record_timeline(
             incident_dir,
             &incident,
             timeline_correlation_id,
+            repair_ids,
             rescueloop_ledger::TimelineComponent::Repair,
             rescueloop_ledger::TimelineTransition::Applied,
             rescueloop_ledger::TimelineOutcome::Completed,
@@ -195,6 +225,10 @@ async fn repair_impl(
         tracing::info!(
             event = "repair.executed",
             incident_id = %incident.id,
+            analysis_id = %analysis_id,
+            plan_id = %plan_id,
+            repair_transaction_id = %receipt.id,
+            verification_id = %verification_id,
             action_type = proposal.action_type,
             verified = receipt.verified,
             rolled_back = receipt.rolled_back,
@@ -218,6 +252,7 @@ async fn repair_impl(
             incident_dir,
             &incident,
             timeline_correlation_id,
+            repair_ids,
             rescueloop_ledger::TimelineComponent::Verifier,
             rescueloop_ledger::TimelineTransition::Verified,
             if receipt.verified {
@@ -238,6 +273,7 @@ async fn repair_impl(
             incident_dir,
             &incident,
             timeline_correlation_id,
+            repair_ids,
             rescueloop_ledger::TimelineComponent::Ledger,
             if receipt.verified {
                 rescueloop_ledger::TimelineTransition::Committed
@@ -271,7 +307,8 @@ async fn repair_impl(
             .join(receipt.id.to_string());
         fs::create_dir_all(&transaction_root).await?;
         let receipt_path = transaction_root.join("operational-receipt.json");
-        fs::write(&receipt_path, serde_json::to_vec_pretty(&receipt)?).await?;
+        crate::storage::replace_durable(&receipt_path, &serde_json::to_vec_pretty(&receipt)?)
+            .await?;
         record_incident_status(
             incident_dir,
             &incident,
@@ -313,12 +350,16 @@ async fn repair_impl(
         .unwrap_or(incident_dir)
         .join("transactions");
     let mut transaction = rescueloop_repair::prepare(&plan, &policy, &transaction_root).await?;
+    transaction.analysis_id = Some(analysis_id);
+    transaction.plan_id = Some(plan_id);
+    repair_ids.repair_transaction_id = Some(transaction.id);
     report!("DRY RUN: {}", serde_json::to_string_pretty(&transaction)?);
     if !approved {
         record_timeline(
             incident_dir,
             &incident,
             timeline_correlation_id,
+            repair_ids,
             rescueloop_ledger::TimelineComponent::Approval,
             rescueloop_ledger::TimelineTransition::Approved,
             rescueloop_ledger::TimelineOutcome::Refused,
@@ -335,6 +376,7 @@ async fn repair_impl(
         incident_dir,
         &incident,
         timeline_correlation_id,
+        repair_ids,
         rescueloop_ledger::TimelineComponent::Approval,
         rescueloop_ledger::TimelineTransition::Approved,
         rescueloop_ledger::TimelineOutcome::Completed,
@@ -354,6 +396,7 @@ async fn repair_impl(
                 incident_dir,
                 &incident,
                 timeline_correlation_id,
+                repair_ids,
                 rescueloop_ledger::TimelineComponent::Repair,
                 rescueloop_ledger::TimelineTransition::Applied,
                 rescueloop_ledger::TimelineOutcome::Failed,
@@ -369,6 +412,7 @@ async fn repair_impl(
         incident_dir,
         &incident,
         timeline_correlation_id,
+        repair_ids,
         rescueloop_ledger::TimelineComponent::Repair,
         rescueloop_ledger::TimelineTransition::Applied,
         rescueloop_ledger::TimelineOutcome::Completed,
@@ -380,7 +424,9 @@ async fn repair_impl(
     tracing::info!(
         event = "repair.applied",
         incident_id = %incident.id,
-        transaction_id = %transaction.id,
+        analysis_id = %analysis_id,
+        plan_id = %plan_id,
+        repair_transaction_id = %transaction.id,
         action_type = proposal.action_type,
         "Repair transaction applied"
     );
@@ -404,10 +450,22 @@ async fn repair_impl(
         None,
     )
     .await?;
+    let verification_id = rescueloop_core::VerificationId::new();
+    transaction.verification_id = Some(verification_id);
+    repair_ids.verification_id = Some(verification_id);
     let replay = {
         let _verification_timer =
             crate::metrics::registry().timer(crate::metrics::DurationKind::Verification);
-        rescueloop_platform::verify_replay(&launch_context).await
+        rescueloop_platform::verify_replay(&launch_context)
+            .instrument(tracing::info_span!(
+                "verification.run",
+                incident_id = %incident.incident_id(),
+                analysis_id = %analysis_id,
+                plan_id = %plan_id,
+                repair_transaction_id = %transaction.id,
+                verification_id = %verification_id,
+            ))
+            .await
     };
     match replay {
         Ok(result) if result.passed => {
@@ -415,6 +473,7 @@ async fn repair_impl(
                 incident_dir,
                 &incident,
                 timeline_correlation_id,
+                repair_ids,
                 rescueloop_ledger::TimelineComponent::Verifier,
                 rescueloop_ledger::TimelineTransition::Verified,
                 rescueloop_ledger::TimelineOutcome::Completed,
@@ -442,7 +501,10 @@ async fn repair_impl(
             tracing::info!(
                 event = "repair.verified",
                 incident_id = %incident.id,
-                transaction_id = %transaction.id,
+                analysis_id = %analysis_id,
+                plan_id = %plan_id,
+                repair_transaction_id = %transaction.id,
+                verification_id = %verification_id,
                 duration_ms = result.duration_ms,
                 "Repair verified"
             );
@@ -450,6 +512,7 @@ async fn repair_impl(
                 incident_dir,
                 &incident,
                 timeline_correlation_id,
+                repair_ids,
                 rescueloop_ledger::TimelineComponent::Ledger,
                 rescueloop_ledger::TimelineTransition::Committed,
                 rescueloop_ledger::TimelineOutcome::Completed,
@@ -468,6 +531,7 @@ async fn repair_impl(
                 incident_dir,
                 &incident,
                 timeline_correlation_id,
+                repair_ids,
                 rescueloop_ledger::TimelineComponent::Verifier,
                 rescueloop_ledger::TimelineTransition::Verified,
                 rescueloop_ledger::TimelineOutcome::Failed,
@@ -481,6 +545,7 @@ async fn repair_impl(
                     incident_dir,
                     &incident,
                     timeline_correlation_id,
+                    repair_ids,
                     rescueloop_ledger::TimelineComponent::Repair,
                     rescueloop_ledger::TimelineTransition::RolledBack,
                     rescueloop_ledger::TimelineOutcome::Failed,
@@ -500,6 +565,7 @@ async fn repair_impl(
                 incident_dir,
                 &incident,
                 timeline_correlation_id,
+                repair_ids,
                 rescueloop_ledger::TimelineComponent::Repair,
                 rescueloop_ledger::TimelineTransition::RolledBack,
                 rescueloop_ledger::TimelineOutcome::Completed,
@@ -525,7 +591,10 @@ async fn repair_impl(
             tracing::warn!(
                 event = "repair.rolled_back",
                 incident_id = %incident.id,
-                transaction_id = %transaction.id,
+                analysis_id = %analysis_id,
+                plan_id = %plan_id,
+                repair_transaction_id = %transaction.id,
+                verification_id = %verification_id,
                 reason = replay_message,
                 "Repair failed verification and was rolled back"
             );
@@ -539,6 +608,7 @@ async fn record_timeline(
     incident_dir: &Path,
     incident: &Incident,
     correlation_id: Uuid,
+    ids: crate::timeline::StageIdentifiers,
     component: rescueloop_ledger::TimelineComponent,
     transition: rescueloop_ledger::TimelineTransition,
     outcome: rescueloop_ledger::TimelineOutcome,
@@ -546,7 +616,7 @@ async fn record_timeline(
     reason: Option<&str>,
     status: rescueloop_core::IncidentStatus,
 ) -> Result<()> {
-    crate::timeline::record(
+    crate::timeline::record_with_ids(
         incident_dir,
         incident,
         crate::timeline::EventSpec {
@@ -559,6 +629,7 @@ async fn record_timeline(
             status,
             occurred_at: chrono::Utc::now(),
         },
+        ids,
     )
     .await?;
     Ok(())

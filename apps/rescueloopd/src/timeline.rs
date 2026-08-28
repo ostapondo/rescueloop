@@ -1,6 +1,9 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use rescueloop_core::{Incident, IncidentStatus};
+use rescueloop_core::{
+    AnalysisId, Incident, IncidentId, IncidentStatus, ObservationId, OccurrenceId, PlanId,
+    RepairTransactionId, VerificationId,
+};
 use rescueloop_ledger::{
     LedgerEntry, NewLedgerEntry, NewTimelineEvent, TimelineComponent, TimelineOutcome,
     TimelineTransition,
@@ -15,6 +18,13 @@ const MAX_TIMELINE_EVENTS: usize = 256;
 pub struct TimelineEvent {
     pub timestamp: DateTime<Utc>,
     pub correlation_id: Uuid,
+    pub observation_id: Option<ObservationId>,
+    pub incident_id: Option<IncidentId>,
+    pub occurrence_id: Option<OccurrenceId>,
+    pub analysis_id: Option<AnalysisId>,
+    pub plan_id: Option<PlanId>,
+    pub repair_transaction_id: Option<RepairTransactionId>,
+    pub verification_id: Option<VerificationId>,
     pub component: TimelineComponent,
     pub lifecycle_transition: TimelineTransition,
     pub outcome: TimelineOutcome,
@@ -34,12 +44,31 @@ pub struct EventSpec<'a> {
     pub occurred_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct StageIdentifiers {
+    pub observation_id: Option<ObservationId>,
+    pub occurrence_id: Option<OccurrenceId>,
+    pub analysis_id: Option<AnalysisId>,
+    pub plan_id: Option<PlanId>,
+    pub repair_transaction_id: Option<RepairTransactionId>,
+    pub verification_id: Option<VerificationId>,
+}
+
 pub async fn record(
     incident_dir: &Path,
     incident: &Incident,
     spec: EventSpec<'_>,
 ) -> Result<Option<LedgerEntry>> {
-    let timeline = NewTimelineEvent::bounded(
+    record_with_ids(incident_dir, incident, spec, StageIdentifiers::default()).await
+}
+
+pub async fn record_with_ids(
+    incident_dir: &Path,
+    incident: &Incident,
+    spec: EventSpec<'_>,
+    ids: StageIdentifiers,
+) -> Result<Option<LedgerEntry>> {
+    let mut timeline = NewTimelineEvent::bounded(
         spec.correlation_id
             .unwrap_or_else(|| incident.correlation_id()),
         spec.occurred_at,
@@ -48,7 +77,18 @@ pub async fn record(
         spec.outcome,
         spec.explanation,
         spec.reason.map(str::to_owned),
-    )?;
+    )?
+    .with_incident_ids(incident);
+    if let Some(observation_id) = ids.observation_id {
+        timeline.observation_id = Some(observation_id);
+    }
+    if let Some(occurrence_id) = ids.occurrence_id {
+        timeline.occurrence_id = Some(occurrence_id);
+    }
+    timeline.analysis_id = ids.analysis_id;
+    timeline.plan_id = ids.plan_id;
+    timeline.repair_transaction_id = ids.repair_transaction_id;
+    timeline.verification_id = ids.verification_id;
     rescueloop_ledger::append_timeline_if_missing(
         &crate::incident_store::ledger_path(incident_dir),
         NewLedgerEntry {
@@ -115,6 +155,13 @@ pub async fn load(incident_dir: &Path, incident: &Incident) -> Result<Vec<Timeli
             Some(TimelineEvent {
                 timestamp: timeline.occurred_at,
                 correlation_id: timeline.correlation_id,
+                observation_id: timeline.observation_id,
+                incident_id: timeline.incident_id,
+                occurrence_id: timeline.occurrence_id,
+                analysis_id: timeline.analysis_id,
+                plan_id: timeline.plan_id,
+                repair_transaction_id: timeline.repair_transaction_id,
+                verification_id: timeline.verification_id,
                 component: timeline.component,
                 lifecycle_transition: timeline.transition,
                 outcome: timeline.outcome,
@@ -173,6 +220,11 @@ mod tests {
                 .iter()
                 .all(|event| event.correlation_id == incident.correlation_id())
         );
+        assert!(events.iter().all(|event| {
+            event.observation_id == Some(incident.observation_id())
+                && event.incident_id == Some(incident.incident_id())
+                && event.occurrence_id == Some(incident.occurrence_id())
+        }));
         assert!(
             events
                 .windows(2)

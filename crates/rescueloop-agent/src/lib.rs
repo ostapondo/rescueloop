@@ -163,7 +163,7 @@ impl AnalysisProvider for CliAnalysisProvider {
     #[tracing::instrument(
         name = "analysis.cli",
         skip(self, request),
-        fields(provider = self.name(), incident_id = %request.incident.id),
+        fields(provider = self.name(), incident_id = %request.incident.id, analysis_id = %request.analysis_id),
         err
     )]
     async fn analyze(&self, request: &AnalysisRequest) -> Result<AnalysisResponse, AnalysisError> {
@@ -264,7 +264,7 @@ impl AnalysisProvider for HttpAnalysisProvider {
     #[tracing::instrument(
         name = "analysis.http",
         skip(self, request),
-        fields(provider = self.name(), incident_id = %request.incident.id),
+        fields(provider = self.name(), incident_id = %request.incident.id, analysis_id = %request.analysis_id),
         err
     )]
     async fn analyze(&self, request: &AnalysisRequest) -> Result<AnalysisResponse, AnalysisError> {
@@ -325,7 +325,9 @@ mod tests {
                 reason: "x".into(),
                 parameters: json!({"cmd":"rm"}),
                 reversible: true,
+                plan_id: None,
             }],
+            analysis_id: None,
         };
         assert!(validate(&request(), &response).is_err());
     }
@@ -341,7 +343,9 @@ mod tests {
                 reason: "x".into(),
                 parameters: json!({}),
                 reversible: true,
+                plan_id: None,
             }],
+            analysis_id: None,
         };
         assert!(validate(&request(), &response).is_err());
     }
@@ -357,7 +361,9 @@ mod tests {
                 reason: "x".into(),
                 parameters: json!({"engine":"shell", "container_id":"abc"}),
                 reversible: true,
+                plan_id: None,
             }],
+            analysis_id: None,
         };
         assert!(validate(&request(), &response).is_err());
     }

@@ -5,6 +5,8 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, path::PathBuf};
 use uuid::Uuid;
 
+use crate::{IncidentId, ObservationId, OccurrenceId};
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum IncidentKind {
@@ -90,6 +92,10 @@ pub struct Incident {
     pub schema_version: u16,
     pub id: Uuid,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation_id: Option<ObservationId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence_id: Option<OccurrenceId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<Uuid>,
     pub observed_at: DateTime<Utc>,
     pub platform: String,
@@ -141,10 +147,14 @@ impl Incident {
         evidence: Evidence,
     ) -> Self {
         let observed_at = Utc::now();
+        let incident_id = Uuid::new_v4();
+        let observation_id = ObservationId::new();
         Self {
             schema_version: 1,
-            id: Uuid::new_v4(),
-            correlation_id: Some(Uuid::new_v4()),
+            id: incident_id,
+            observation_id: Some(observation_id),
+            occurrence_id: Some(OccurrenceId::from(incident_id)),
+            correlation_id: Some(observation_id.as_uuid()),
             observed_at,
             platform: platform.into(),
             kind,
@@ -171,6 +181,20 @@ impl Incident {
 
     pub fn correlation_id(&self) -> Uuid {
         self.correlation_id.unwrap_or(self.id)
+    }
+
+    pub fn incident_id(&self) -> IncidentId {
+        IncidentId::from(self.id)
+    }
+
+    pub fn observation_id(&self) -> ObservationId {
+        self.observation_id
+            .unwrap_or_else(|| ObservationId::from(self.correlation_id()))
+    }
+
+    pub fn occurrence_id(&self) -> OccurrenceId {
+        self.occurrence_id
+            .unwrap_or_else(|| OccurrenceId::from(self.id))
     }
 
     /// Excludes unstable and private fields.

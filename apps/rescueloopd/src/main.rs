@@ -4,8 +4,8 @@ use rescueloop_agent::{ALLOWED_ACTIONS, HttpAnalysisProvider};
 use rescueloop_core::{AnalysisProvider, AnalysisRequest, Incident};
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use tracing::Instrument;
 use tracing::{error, info};
-use uuid::Uuid;
 
 mod console;
 mod doctor;
@@ -450,20 +450,28 @@ pub(crate) async fn analyze_with_provider(
         .filter(|action| cfg!(unix) || *action != "set_permission")
         .map(str::to_string)
         .collect();
+    let incident_id = incident.id;
+    let request = AnalysisRequest::bounded(incident, allowed_actions);
+    let analysis_id = request.analysis_id;
+    let analysis_correlation_id = analysis_id.as_uuid();
     info!(
         event = "analysis.started",
-        incident_id = %incident.id,
+        incident_id = %incident_id,
+        analysis_id = %analysis_id,
         provider = provider.name(),
         "Analysis started"
     );
-    let incident_id = incident.id;
-    let analysis_correlation_id = Uuid::new_v4();
-    let request = AnalysisRequest::bounded(incident, allowed_actions);
-    let response = match provider.analyze(&request).await {
+    let analysis_span = tracing::info_span!(
+        "analysis.run",
+        incident_id = %incident_id,
+        analysis_id = %analysis_id,
+        provider = provider.name(),
+    );
+    let mut response = match provider.analyze(&request).instrument(analysis_span).await {
         Ok(response) => response,
         Err(error) => {
             if let Some(incident_dir) = path.parent() {
-                let _ = timeline::record(
+                let _ = timeline::record_with_ids(
                     incident_dir,
                     &request.incident,
                     timeline::EventSpec {
@@ -476,12 +484,17 @@ pub(crate) async fn analyze_with_provider(
                         status: rescueloop_core::IncidentStatus::Investigating,
                         occurred_at: chrono::Utc::now(),
                     },
+                    timeline::StageIdentifiers {
+                        analysis_id: Some(analysis_id),
+                        ..Default::default()
+                    },
                 )
                 .await;
             }
             error!(
                 event = "analysis.failed",
                 incident_id = %incident_id,
+                analysis_id = %analysis_id,
                 provider = provider.name(),
                 error = %error,
                 "Analysis failed"
@@ -489,11 +502,15 @@ pub(crate) async fn analyze_with_provider(
             return Err(error.into());
         }
     };
+    response.analysis_id = Some(analysis_id);
+    for action in &mut response.proposed_actions {
+        action.plan_id = Some(rescueloop_core::PlanId::new());
+    }
     if let Some(output) = output {
-        fs::write(output, serde_json::to_vec_pretty(&response)?).await?;
+        storage::replace_durable(output, &serde_json::to_vec_pretty(&response)?).await?;
     }
     if let Some(incident_dir) = path.parent() {
-        timeline::record(
+        timeline::record_with_ids(
             incident_dir,
             &request.incident,
             timeline::EventSpec {
@@ -506,9 +523,17 @@ pub(crate) async fn analyze_with_provider(
                 status: rescueloop_core::IncidentStatus::Diagnosed,
                 occurred_at: chrono::Utc::now(),
             },
+            timeline::StageIdentifiers {
+                analysis_id: Some(analysis_id),
+                ..Default::default()
+            },
         )
         .await?;
-        timeline::record(
+        let plan_id = response
+            .proposed_actions
+            .first()
+            .and_then(|action| action.plan_id);
+        timeline::record_with_ids(
             incident_dir,
             &request.incident,
             timeline::EventSpec {
@@ -539,12 +564,18 @@ pub(crate) async fn analyze_with_provider(
                 },
                 occurred_at: chrono::Utc::now(),
             },
+            timeline::StageIdentifiers {
+                analysis_id: Some(analysis_id),
+                plan_id,
+                ..Default::default()
+            },
         )
         .await?;
     }
     info!(
         event = "analysis.completed",
         incident_id = %incident_id,
+        analysis_id = %analysis_id,
         provider = provider.name(),
         proposed_actions = response.proposed_actions.len(),
         needs_more_evidence = response.needs_more_evidence,
@@ -601,6 +632,7 @@ mod timeline_flow_tests {
         AnalysisError, AnalysisResponse, Evidence, IncidentKind, ProposedAction,
     };
     use std::collections::BTreeMap;
+    use uuid::Uuid;
 
     struct FixedProvider;
 
@@ -622,8 +654,10 @@ mod timeline_flow_tests {
                     reason: "Use the evidence-bound service identifier".into(),
                     parameters: serde_json::json!({"service_id": "fixture"}),
                     reversible: true,
+                    plan_id: None,
                 }],
                 needs_more_evidence: false,
+                analysis_id: None,
             })
         }
     }
@@ -651,12 +685,27 @@ mod timeline_flow_tests {
         timeline::ensure_initial(&incident_dir, &incident)
             .await
             .unwrap();
-        analyze_with_provider(&path, &FixedProvider, None)
+        let analysis_path = root.join("analysis.json");
+        let first = analyze_with_provider(&path, &FixedProvider, Some(&analysis_path))
             .await
             .unwrap();
-        analyze_with_provider(&path, &FixedProvider, None)
+        let second = analyze_with_provider(&path, &FixedProvider, Some(&analysis_path))
             .await
             .unwrap();
+        assert!(first.analysis_id.is_some());
+        assert!(first.proposed_actions[0].plan_id.is_some());
+        assert_ne!(first.analysis_id, second.analysis_id);
+        assert_ne!(
+            first.proposed_actions[0].plan_id,
+            second.proposed_actions[0].plan_id
+        );
+        let saved: AnalysisResponse =
+            serde_json::from_slice(&tokio::fs::read(&analysis_path).await.unwrap()).unwrap();
+        assert_eq!(saved.analysis_id, second.analysis_id);
+        assert_eq!(
+            saved.proposed_actions[0].plan_id,
+            second.proposed_actions[0].plan_id
+        );
         let events = timeline::load(&incident_dir, &incident).await.unwrap();
         let analyzed = events
             .iter()
@@ -667,10 +716,13 @@ mod timeline_flow_tests {
         assert_eq!(analyzed.len(), 2);
         assert_ne!(analyzed[0].correlation_id, analyzed[1].correlation_id);
         for event in analyzed {
+            assert!(event.analysis_id.is_some());
             assert!(events.iter().any(|candidate| {
                 candidate.correlation_id == event.correlation_id
                     && candidate.lifecycle_transition
                         == rescueloop_ledger::TimelineTransition::PlanProposed
+                    && candidate.analysis_id == event.analysis_id
+                    && candidate.plan_id.is_some()
             }));
         }
         tokio::fs::remove_dir_all(root).await.unwrap();

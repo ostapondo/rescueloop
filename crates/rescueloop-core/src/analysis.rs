@@ -3,11 +3,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
-use crate::Incident;
+use crate::{AnalysisId, Incident, PlanId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisRequest {
     pub schema_version: u16,
+    pub analysis_id: AnalysisId,
     pub incident: Incident,
     pub allowed_actions: Vec<String>,
     pub evidence_assessment: EvidenceAssessment,
@@ -96,7 +97,8 @@ impl AnalysisRequest {
             (if has_code { 0.5 } else { 0.0 }) + (if has_diagnostics { 0.5 } else { 0.0 });
         let retained_evidence = incident.evidence.len();
         Self {
-            schema_version: 2,
+            schema_version: 3,
+            analysis_id: AnalysisId::new(),
             incident,
             allowed_actions,
             evidence_assessment: EvidenceAssessment {
@@ -115,6 +117,8 @@ pub struct AnalysisResponse {
     pub hypotheses: Vec<Hypothesis>,
     pub proposed_actions: Vec<ProposedAction>,
     pub needs_more_evidence: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis_id: Option<AnalysisId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,6 +134,8 @@ pub struct ProposedAction {
     pub reason: String,
     pub parameters: Value,
     pub reversible: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_id: Option<PlanId>,
 }
 
 #[derive(Debug, thiserror::Error)]

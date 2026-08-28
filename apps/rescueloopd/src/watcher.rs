@@ -245,7 +245,7 @@ async fn run_source(
                     degraded = false;
                 }
                 retry_delay = Duration::from_secs(2);
-                info!(event = "observation.received", source = source.name(), incident_id = %incident.id, kind = ?incident.kind, "Failure observation received");
+                info!(event = "observation.received", source = source.name(), observation_id = %incident.observation_id(), incident_id = %incident.incident_id(), occurrence_id = %incident.occurrence_id(), kind = ?incident.kind, "Failure observation received");
                 health.observation_received(&source_name);
                 registry().event_received(EventSource::from_name(&source_name));
                 let permit = tokio::select! {
@@ -312,20 +312,20 @@ async fn persist(
         SaveOutcome::Duplicate => {
             health.deduplicated(source);
             health.publish_to(directory, None).await?;
-            info!(event = "incident.duplicate", incident_id = %incident.id, "Exact duplicate observation ignored");
+            info!(event = "incident.duplicate", observation_id = %incident.observation_id(), incident_id = %incident.incident_id(), occurrence_id = %incident.occurrence_id(), "Exact duplicate observation ignored");
             return Ok(());
         }
         SaveOutcome::Grouped => {
             health.grouped();
             health.publish_to(directory, None).await?;
-            info!(event = "incident.grouped", incident_id = %incident.id, "Incident grouped with an active failure");
+            info!(event = "incident.grouped", observation_id = %incident.observation_id(), incident_id = %incident.incident_id(), occurrence_id = %incident.occurrence_id(), "Incident grouped with an active failure");
             return Ok(());
         }
         SaveOutcome::Created => {}
     }
     health.persisted();
     health.publish_to(directory, None).await?;
-    info!(event = "incident.persisted", incident_id = %incident.id, kind = ?incident.kind, "New incident persisted");
+    info!(event = "incident.persisted", observation_id = %incident.observation_id(), incident_id = %incident.incident_id(), occurrence_id = %incident.occurrence_id(), kind = ?incident.kind, "New incident persisted");
     println!("DETECTED: {:?}: {}", incident.kind, incident.message);
     println!("Incident saved to {}", destination.display());
     println!(
