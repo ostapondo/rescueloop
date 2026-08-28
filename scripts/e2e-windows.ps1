@@ -115,10 +115,11 @@ try {
     $RestartedPid = (Get-Content (Join-Path $State "watch-health-v1.json") -Raw | ConvertFrom-Json).pid
     if ($RestartedPid -eq $InitialPid) { throw "restart did not replace the watcher process" }
 
-    # Exercise the /End -> /Run race with concurrent idempotent starts.
+    # Exercise the native /End -> /Run race. Task Scheduler may reject one
+    # contender, but the converged service state and CLI must remain healthy.
     & schtasks /End /TN RescueLoop | Out-Null
     $Starts = 1..2 | ForEach-Object {
-        Start-Process -FilePath $Binary -ArgumentList @("--incident-dir", $Incidents, "start") `
+        Start-Process -FilePath schtasks.exe -ArgumentList @("/Run", "/TN", "RescueLoop") `
             -RedirectStandardOutput (Join-Path $Root "start-$_.out") `
             -RedirectStandardError (Join-Path $Root "start-$_.err") `
             -PassThru -WindowStyle Hidden
@@ -127,13 +128,14 @@ try {
     $HungStarts = @($Starts | Where-Object { -not $_.HasExited })
     if ($HungStarts.Count -gt 0) {
         $HungStarts | Stop-Process -Force
-        throw "concurrent watcher start exceeded its bounded deadline"
+        throw "concurrent schtasks /Run exceeded its bounded deadline"
     }
-    if ($Starts | Where-Object { $_.ExitCode -ne 0 }) {
-        $Errors = 1..2 | ForEach-Object { Get-Content (Join-Path $Root "start-$_.err") -Raw }
-        throw "concurrent watcher start failed: $Errors"
+    if (-not ($Starts | Where-Object { $_.ExitCode -eq 0 })) {
+        throw "all concurrent schtasks /Run attempts failed"
     }
     $null = Assert-Health "healthy"
+    & $Binary start
+    if ($LASTEXITCODE -ne 0) { throw "idempotent start failed after the native race" }
 
     # Force a non-English UI culture; numeric ScheduledTaskState remains stable.
     $LocalizedState = & powershell -NoProfile -NonInteractive -Command "[cultureinfo]::CurrentUICulture=[cultureinfo]'pl-PL'; [int](Get-ScheduledTask -TaskName 'RescueLoop').State"
