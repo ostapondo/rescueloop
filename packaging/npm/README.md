@@ -20,5 +20,9 @@ rescueloop uninstall
 `stop` preserves the background registration; `uninstall` removes the registration but does not
 remove the npm package or delete incident history.
 
+The watcher runs from a stable per-user binary copy. Updating or replacing the npm package while
+the watcher is active does not leave the native service pointing into the old `node_modules` tree;
+the next start refreshes the stable copy with a bounded native restart.
+
 The package includes native binaries for macOS arm64, macOS x64, and Windows x64. See the
 [RescueLoop repository](https://github.com/ostapondo/rescueloop) for full usage and security details.

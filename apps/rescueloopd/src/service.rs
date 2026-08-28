@@ -71,8 +71,8 @@ pub async fn install_to_path() -> Result<PathBuf> {
         }
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o755)).await?;
-        ensure_unix_path(&home.join(".zprofile"), &bin).await?;
-        ensure_unix_path(&home.join(".bash_profile"), &bin).await?;
+        ensure_unix_path(&home.join(".zprofile"), bin).await?;
+        ensure_unix_path(&home.join(".bash_profile"), bin).await?;
         Ok(destination)
     }
     #[cfg(target_os = "windows")]

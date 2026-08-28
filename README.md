@@ -91,7 +91,7 @@ The main commands, close to the actual CLI output:
 | `rescueloop start` | Explicitly start the watcher and open the console |
 | `rescueloop stop` | Stop the watcher but keep its background registration |
 | `rescueloop status` | Show whether the watcher is installed and running |
-| `rescueloop doctor` | Explain watcher, event-source, queue, journal, storage, index, ledger, and log-writer health |
+| `rescueloop doctor` | Explain watcher, event-source, queue, journal, storage, index, ledger, and log-writer health (`--json` for automation) |
 | `rescueloop diagnostics export` | Preview a bounded, redacted local support bundle; add `--confirm` to write it |
 | `rescueloop timeline <incident.json> [--json]` | Show the bounded, hash-linked lifecycle timeline for one incident |
 | `rescueloop restart` | Restart the registered watcher |
