@@ -118,10 +118,21 @@ try {
     # Exercise the /End -> /Run race with concurrent idempotent starts.
     & schtasks /End /TN RescueLoop | Out-Null
     $Starts = 1..2 | ForEach-Object {
-        Start-Process -FilePath $Binary -ArgumentList @("--incident-dir", $Incidents, "start") -PassThru -WindowStyle Hidden
+        Start-Process -FilePath $Binary -ArgumentList @("--incident-dir", $Incidents, "start") `
+            -RedirectStandardOutput (Join-Path $Root "start-$_.out") `
+            -RedirectStandardError (Join-Path $Root "start-$_.err") `
+            -PassThru -WindowStyle Hidden
     }
-    $Starts | Wait-Process
-    if ($Starts | Where-Object { $_.ExitCode -ne 0 }) { throw "concurrent watcher start failed" }
+    $Starts | Wait-Process -Timeout 20 -ErrorAction SilentlyContinue
+    $HungStarts = @($Starts | Where-Object { -not $_.HasExited })
+    if ($HungStarts.Count -gt 0) {
+        $HungStarts | Stop-Process -Force
+        throw "concurrent watcher start exceeded its bounded deadline"
+    }
+    if ($Starts | Where-Object { $_.ExitCode -ne 0 }) {
+        $Errors = 1..2 | ForEach-Object { Get-Content (Join-Path $Root "start-$_.err") -Raw }
+        throw "concurrent watcher start failed: $Errors"
+    }
     $null = Assert-Health "healthy"
 
     # Force a non-English UI culture; numeric ScheduledTaskState remains stable.
