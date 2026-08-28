@@ -99,6 +99,16 @@ impl Registry {
         self.update(|metrics| metrics.journal_pending_count = count as u64);
     }
 
+    pub fn journal_started(&self) {
+        self.update(|metrics| increment(&mut metrics.journal_pending_count));
+    }
+
+    pub fn journal_completed(&self) {
+        self.update(|metrics| {
+            metrics.journal_pending_count = metrics.journal_pending_count.saturating_sub(1)
+        });
+    }
+
     pub fn rollback(&self) {
         self.update(|metrics| increment(&mut metrics.rollback_total));
     }
@@ -186,6 +196,8 @@ mod tests {
         registry.source_reconnected();
         registry.set_queue_depth(7);
         registry.set_journal_pending_count(3);
+        registry.journal_started();
+        registry.journal_completed();
         registry.rollback();
         registry.set_log_write_failures(2);
         registry.index_rebuilt();
