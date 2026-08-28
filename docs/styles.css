@@ -143,8 +143,14 @@ h1 em { color: var(--orange); font-style: normal; }
 
 .install { text-align: center; }
 .install .eyebrow { text-align: left; }
-.install h2 { margin: 0 auto; max-width: 17ch; font-size: clamp(2.8rem, 6vw, 7rem); }
-.install-grid { margin: 3rem auto 0; max-width: 52rem; text-align: left; border: 1px solid var(--line); }
+.install h2 {
+  margin: 0 auto;
+  max-width: 22ch;
+  font-size: clamp(2.35rem, 3.6vw, 3.45rem);
+  line-height: .98;
+  letter-spacing: -.04em;
+}
+.install-grid { margin: 2.5rem auto 0; max-width: 48rem; text-align: left; border: 1px solid var(--line); }
 .install-grid div { display: grid; grid-template-columns: 4rem 1fr; padding: 1rem; border-bottom: 1px solid var(--line); }
 .install-grid div:last-child { border: 0; }
 .install-grid span { color: var(--orange); }
