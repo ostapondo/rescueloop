@@ -192,6 +192,16 @@ pub async fn load(path: &Path) -> Result<Vec<LedgerEntry>> {
     tokio::task::spawn_blocking(move || load_locked(&path)).await?
 }
 
+/// Validates the complete hash chain while enforcing diagnostic/read-side resource bounds.
+pub async fn load_bounded(
+    path: &Path,
+    max_bytes: u64,
+    max_entries: usize,
+) -> Result<Vec<LedgerEntry>> {
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || load_locked_bounded(&path, max_bytes, max_entries)).await?
+}
+
 fn parse_entries(content: &str) -> Result<Vec<LedgerEntry>> {
     let mut entries = Vec::new();
     let mut previous: Option<String> = None;
@@ -256,6 +266,36 @@ fn load_locked(path: &Path) -> Result<Vec<LedgerEntry>> {
     };
     file.lock_shared()?;
     let result = read_entries(&file);
+    FileExt::unlock(&file)?;
+    result
+}
+
+fn load_locked_bounded(
+    path: &Path,
+    max_bytes: u64,
+    max_entries: usize,
+) -> Result<Vec<LedgerEntry>> {
+    let Some(file) = open_existing(path)? else {
+        return Ok(Vec::new());
+    };
+    file.lock_shared()?;
+    let result = (|| {
+        if file.metadata()?.len() > max_bytes {
+            bail!("ledger exceeds the bounded read limit")
+        }
+        let mut content = String::new();
+        BufReader::new(file.try_clone()?)
+            .take(max_bytes.saturating_add(1))
+            .read_to_string(&mut content)?;
+        if content.len() as u64 > max_bytes {
+            bail!("ledger exceeds the bounded read limit")
+        }
+        let entries = parse_entries(&content)?;
+        if entries.len() > max_entries {
+            bail!("ledger exceeds the bounded entry limit")
+        }
+        Ok(entries)
+    })();
     FileExt::unlock(&file)?;
     result
 }
@@ -707,5 +747,21 @@ mod tests {
                 .flatten()
                 .any(|entry| { entry.file_name().to_string_lossy().contains(".torn-") })
         );
+    }
+
+    #[tokio::test]
+    async fn bounded_load_rejects_oversized_health_audits() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("ledger.jsonl");
+        append(&path, new(incident("oom", "1"), IncidentStatus::Detected))
+            .await
+            .unwrap();
+        append(&path, new(incident("panic", "1"), IncidentStatus::Detected))
+            .await
+            .unwrap();
+
+        assert!(load_bounded(&path, 8 * 1024, 2).await.is_ok());
+        assert!(load_bounded(&path, 8 * 1024, 1).await.is_err());
+        assert!(load_bounded(&path, 1, 2).await.is_err());
     }
 }

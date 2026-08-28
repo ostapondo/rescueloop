@@ -1,5 +1,6 @@
 use rescueloop_core::{AnalysisRequest, Evidence, Incident, IncidentKind, IncidentStatus};
 use rescueloop_ledger::{LedgerEntry, TimelineOutcome, TimelineTransition};
+use serde::Serialize;
 use serde_json::Value;
 use std::{collections::BTreeSet, path::Path};
 
@@ -8,7 +9,8 @@ use crate::watch_health::{RUNTIME_CONTRACT_VERSION, Snapshot};
 const MAX_REPAIR_RECEIPTS: usize = 256;
 const MAX_RECEIPT_BYTES: u64 = 1024 * 1024;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AssertionStatus {
     Pass,
     Fail,
@@ -25,7 +27,8 @@ impl AssertionStatus {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AssertionKind {
     ObservationDurability,
     SourceIsolation,
@@ -52,7 +55,7 @@ impl AssertionKind {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Assertion {
     pub kind: AssertionKind,
     pub status: AssertionStatus,

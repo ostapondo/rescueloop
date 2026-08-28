@@ -8,6 +8,7 @@ use tracing::Instrument;
 use tracing::{error, info};
 
 mod console;
+mod diagnostics;
 mod doctor;
 mod incident_store;
 mod logging;
@@ -52,6 +53,11 @@ enum Command {
     Status,
     /// Explain the health of RescueLoop, its event sources, and local state.
     Doctor,
+    /// Preview or explicitly write a bounded, redacted support bundle.
+    Diagnostics {
+        #[command(subcommand)]
+        action: DiagnosticsAction,
+    },
     /// Show the hash-linked lifecycle timeline for one saved incident.
     Timeline {
         incident: PathBuf,
@@ -169,6 +175,17 @@ enum IndexAction {
     Rebuild,
 }
 
+#[derive(Subcommand)]
+enum DiagnosticsAction {
+    /// Preview bundle contents; write only when --confirm is supplied.
+    Export {
+        #[arg(long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        confirm: bool,
+    },
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 enum LogOutput {
     Pretty,
@@ -218,6 +235,11 @@ async fn run(cli: Cli, log_guard: &logging::LogGuard) -> Result<()> {
         Some(Command::Stop) => service::stop().await,
         Some(Command::Status) => service::status().await,
         Some(Command::Doctor) => doctor::run(&cli.incident_dir, log_guard).await,
+        Some(Command::Diagnostics { action }) => match action {
+            DiagnosticsAction::Export { output, confirm } => {
+                diagnostics::export(&cli.incident_dir, log_guard, output, confirm).await
+            }
+        },
         Some(Command::Timeline { incident, json }) => show_timeline(&incident, json).await,
         Some(Command::Restart) => service::restart().await,
         Some(Command::Uninstall) => service::uninstall().await,
@@ -313,6 +335,7 @@ impl Command {
             Self::Stop => "stop",
             Self::Status => "status",
             Self::Doctor => "doctor",
+            Self::Diagnostics { .. } => "diagnostics",
             Self::Timeline { .. } => "timeline",
             Self::Restart => "restart",
             Self::Uninstall => "uninstall",
@@ -587,7 +610,7 @@ pub(crate) async fn analyze_with_provider(
 
 #[cfg(test)]
 mod cli_tests {
-    use super::{Cli, Command};
+    use super::{Cli, Command, DiagnosticsAction};
     use clap::Parser;
 
     #[test]
@@ -623,6 +646,40 @@ mod cli_tests {
                 json: true
             }) if incident == std::path::Path::new("incident.json")
         ));
+    }
+
+    #[test]
+    fn diagnostics_export_requires_an_explicit_write_flag() {
+        let preview = Cli::try_parse_from(["rescueloop", "diagnostics", "export"]).unwrap();
+        let Some(Command::Diagnostics {
+            action: DiagnosticsAction::Export { confirm, output },
+        }) = preview.command
+        else {
+            panic!("diagnostics export should parse")
+        };
+        assert!(!confirm);
+        assert!(output.is_none());
+
+        let write = Cli::try_parse_from([
+            "rescueloop",
+            "diagnostics",
+            "export",
+            "--confirm",
+            "--output",
+            "support.tar.gz",
+        ])
+        .unwrap();
+        let Some(Command::Diagnostics {
+            action: DiagnosticsAction::Export { confirm, output },
+        }) = write.command
+        else {
+            panic!("confirmed diagnostics export should parse")
+        };
+        assert!(confirm);
+        assert_eq!(
+            output.as_deref(),
+            Some(std::path::Path::new("support.tar.gz"))
+        );
     }
 }
 

@@ -1,5 +1,6 @@
 use anyhow::Result;
 use chrono::Utc;
+use serde::Serialize;
 use std::{path::Path, time::Duration};
 
 use crate::{
@@ -10,8 +11,11 @@ use crate::{
 };
 
 const STALE_WATCH_HEALTH: Duration = Duration::from_secs(150);
+const MAX_LEDGER_HEALTH_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_LEDGER_HEALTH_ENTRIES: usize = 20_000;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HealthState {
     Healthy,
     Degraded,
@@ -28,14 +32,14 @@ impl HealthState {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Check {
     pub name: String,
     pub state: HealthState,
     pub detail: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct DoctorSnapshot {
     pub version: String,
     pub watcher_uptime_seconds: Option<u64>,
@@ -84,7 +88,12 @@ pub async fn collect(incident_dir: &Path, logs: &LogGuard) -> DoctorSnapshot {
         Ok(index) => index.count().await.ok(),
         Err(_) => None,
     };
-    let ledger = rescueloop_ledger::load(&incident_store::ledger_path(incident_dir)).await;
+    let ledger = rescueloop_ledger::load_bounded(
+        &incident_store::ledger_path(incident_dir),
+        MAX_LEDGER_HEALTH_BYTES,
+        MAX_LEDGER_HEALTH_ENTRIES,
+    )
+    .await;
     let background_log_errors = watcher
         .as_ref()
         .map_or(logs.write_errors(), |value| value.log_write_errors);
