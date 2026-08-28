@@ -52,7 +52,7 @@ You approve the fix. RescueLoop then starts the database again to check that it 
 - Local incident history with repeated failures grouped together
 - Analysis through Codex CLI, Claude Code, or an HTTP adapter
 - Approved repairs for files, JSON config, permissions, services, and containers
-- Read-only local MCP access to redacted incidents
+- Read-only local MCP access to redacted incidents and bounded observability summaries
 
 ## Try it
 
@@ -168,9 +168,9 @@ the authoritative JSON and audits the bounded local ledger and repair receipts. 
 receipts are published only after their ledger lineage is durable. Redaction probes use synthetic
 sentinels and never read incident evidence or user secrets.
 
-The assertions remain local and add no telemetry, network listener, or MCP tool. They expose
-privileged implementation health in the CLI/TUI only; the existing read-only MCP incident surface
-is unchanged.
+The assertions remain local and add no telemetry or network listener. A bounded subset is also
+available through the additive read-only `get_agent_health` MCP tool; it cannot configure or control
+the agent.
 
 ## Diagnostic bundles
 
@@ -229,8 +229,18 @@ RescueLoop can change a machine, so the boundary is deliberately narrow:
 - Supported file and configuration changes are backed up for rollback.
 - MCP cannot repair, replay, run a shell, or read arbitrary files.
 
-The MCP server is local and read-only. It exposes `list_incidents`, `get_incident`, and
-`get_incident_timeline`:
+The MCP server is local and read-only. It exposes six additive tools:
+
+- `list_incidents` and `get_incident` return bounded, redacted incident information;
+- `get_incident_timeline` returns the bounded hash-linked lifecycle view by validated UUID;
+- `get_agent_health` reports component health and local SLO assertions;
+- `list_event_sources` reports source status, reconnects, backoff, and bounded counters;
+- `get_local_metrics_summary` reports typed process-local counters and duration summaries.
+
+The observability tools use fixed schemas and accept no paths. Reading health never creates,
+rebuilds, or quarantines the SQLite projection. No tool can enable sources, export telemetry,
+approve or apply repairs, replay, rollback, read arbitrary files, or return raw artifacts, launch
+arguments, working directories, secrets, evidence, or model payloads.
 
 ```sh
 rescueloop --incident-dir /absolute/path/to/.rescueloop/incidents mcp

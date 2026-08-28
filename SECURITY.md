@@ -26,6 +26,9 @@ Older releases may not receive patches.
   verification, and rollback where supported.
 - The MCP server uses local `stdio`, is read-only, and exposes no repair, replay, rollback, shell,
   arbitrary file, secret, raw artifact, launch argument, or working-directory access.
+- MCP observability is limited to bounded health, event-source, timeline, and typed local-metrics
+  summaries with fixed schemas. These tools accept no paths and cannot change configuration,
+  sources, telemetry, incidents, repairs, the ledger, or the disposable index.
 
 The MCP boundary is covered by protocol initialization, discovery, invalid-input, redaction, and
 absence-of-mutation-tool tests in `scripts/validate-mcp.sh`.
