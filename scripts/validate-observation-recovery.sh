@@ -22,6 +22,10 @@ test "$(find "$state_dir/observation-journal" -name '*.json' -type f | wc -l)" -
 test "$(find "$state_dir/occurrences" -name '*.json' -type f | wc -l)" -eq 2
 test "$(find "$incident_dir" -name '*.json' -type f | wc -l)" -eq 1
 jq -e '.occurrence_count == 2 and .last_occurrence_id' "$incident_dir"/*.json >/dev/null
-test "$(wc -l < "$state_dir/repair-ledger.jsonl")" -eq 1
+test "$(wc -l < "$state_dir/repair-ledger.jsonl")" -eq 4
+jq -e -s '
+  map(select(.timeline != null) | .timeline.transition)
+  == ["observed", "normalized", "persisted", "grouped"]
+' "$state_dir/repair-ledger.jsonl" >/dev/null
 
 echo "Observation crash recovery validation passed."
