@@ -8,7 +8,7 @@ use tracing::{error, info, warn};
 use crate::{
     console::load_settings,
     incident_store::{recover_pending_observations, save_incident},
-    watch_health::WatchHealth,
+    watch_health::{self, WatchHealth},
 };
 
 const EVENT_QUEUE_CAPACITY: usize = 256;
@@ -32,12 +32,14 @@ pub async fn run(directory: &Path) -> Result<()> {
     announce(directory, &source_names);
 
     let (sender, mut events) = mpsc::channel(EVENT_QUEUE_CAPACITY);
-    let health = Arc::new(WatchHealth::default());
+    let health = Arc::new(WatchHealth::new(EVENT_QUEUE_CAPACITY));
+    watch_health::publish(directory, &health.snapshot(None)).await?;
     let cancellation = CancellationToken::new();
     let mut tasks = JoinSet::new();
     spawn_heartbeat(
         &mut tasks,
         source_names.len(),
+        directory.to_path_buf(),
         Arc::clone(&health),
         cancellation.clone(),
     );
@@ -65,8 +67,8 @@ pub async fn run(directory: &Path) -> Result<()> {
                 }
             }
             event = events.recv() => match event {
-                Some(incident) => {
-                    if let Err(error) = persist(directory, incident, &health).await {
+                Some((source, incident)) => {
+                    if let Err(error) = persist(directory, &source, incident, &health).await {
                         break Err(error);
                     }
                 }
@@ -87,8 +89,8 @@ pub async fn run(directory: &Path) -> Result<()> {
     };
     if failure.is_none() {
         let drain = async {
-            while let Some(incident) = events.recv().await {
-                persist(directory, incident, &health).await?;
+            while let Some((source, incident)) = events.recv().await {
+                persist(directory, &source, incident, &health).await?;
             }
             Ok::<_, anyhow::Error>(())
         };
@@ -98,7 +100,7 @@ pub async fn run(directory: &Path) -> Result<()> {
             Err(_) => {
                 warn!(
                     event = "watch.drain_timeout",
-                    queue_depth = health.snapshot().queue_depth,
+                    queue_depth = health.snapshot(None).queue_depth,
                     "Watcher shutdown drain timed out"
                 );
                 failure = Some(anyhow::anyhow!("watcher shutdown drain timed out"));
@@ -114,6 +116,7 @@ pub async fn run(directory: &Path) -> Result<()> {
     }
 
     if let Some(error) = failure {
+        let _ = watch_health::publish(directory, &health.snapshot(Some("failure".into()))).await;
         return Err(error);
     }
 
@@ -122,8 +125,14 @@ pub async fn run(directory: &Path) -> Result<()> {
             event = "watch.sources_exhausted",
             "All event sources stopped"
         );
+        let _ = watch_health::publish(
+            directory,
+            &health.snapshot(Some("sources_exhausted".into())),
+        )
+        .await;
         anyhow::bail!("all event sources stopped")
     }
+    watch_health::publish(directory, &health.snapshot(Some("clean_shutdown".into()))).await?;
     info!(event = "watch.stopped", "Watcher stopped cleanly");
     Ok(())
 }
@@ -146,6 +155,7 @@ fn announce(directory: &Path, sources: &[&str]) {
 fn spawn_heartbeat(
     tasks: &mut JoinSet<()>,
     source_count: usize,
+    incident_dir: std::path::PathBuf,
     health: Arc<WatchHealth>,
     cancellation: CancellationToken,
 ) {
@@ -156,16 +166,19 @@ fn spawn_heartbeat(
             tokio::select! {
                 _ = cancellation.cancelled() => return,
                 _ = interval.tick() => {
-                    let snapshot = health.snapshot();
+                    let snapshot = health.snapshot(None);
+                    if let Err(error) = watch_health::publish(&incident_dir, &snapshot).await {
+                        warn!(event = "watch.health_publish_failed", error = %format!("{error:#}"), "Watcher health snapshot could not be published");
+                    }
                     info!(
                         event = "watch.heartbeat",
                         source_count,
-                        active_sources = snapshot.active_sources,
-                        degraded_sources = snapshot.degraded_sources,
-                        retry_count = snapshot.retry_count,
+                        active_sources = snapshot.sources.iter().filter(|source| source.state != crate::watch_health::SourceState::Disconnected).count(),
+                        degraded_sources = snapshot.sources.iter().filter(|source| source.state == crate::watch_health::SourceState::Degraded).count(),
+                        retry_count = snapshot.sources.iter().map(|source| source.reconnect_count).sum::<u64>(),
                         received = snapshot.received,
                         persisted = snapshot.persisted,
-                        grouped = snapshot.grouped,
+                        deduplicated = snapshot.deduplicated,
                         queue_depth = snapshot.queue_depth,
                         "Watcher is alive"
                     );
@@ -177,11 +190,12 @@ fn spawn_heartbeat(
 
 async fn run_source(
     mut source: Box<dyn IncidentCollector>,
-    sender: mpsc::Sender<Incident>,
+    sender: mpsc::Sender<(String, Incident)>,
     health: Arc<WatchHealth>,
     cancellation: CancellationToken,
 ) {
-    health.source_started();
+    let source_name = source.name().to_owned();
+    health.source_started(&source_name);
     info!(
         event = "source.started",
         source = source.name(),
@@ -203,26 +217,23 @@ async fn run_source(
                         "Event source recovered"
                     );
                     degraded = false;
-                    health.source_recovered();
                 }
                 retry_delay = Duration::from_secs(2);
                 info!(event = "observation.received", source = source.name(), incident_id = %incident.id, kind = ?incident.kind, "Failure observation received");
-                health.observation_received();
+                health.observation_received(&source_name);
                 let sent = tokio::select! {
                     _ = cancellation.cancelled() => false,
-                    result = sender.send(incident) => result.is_ok(),
+                    result = sender.send((source_name.clone(), incident)) => result.is_ok(),
                 };
                 if !sent {
+                    health.dropped(&source_name);
                     break;
                 }
                 health.queued();
             }
             Err(error) => {
-                if !degraded {
-                    health.source_degraded();
-                }
                 degraded = true;
-                health.retrying();
+                health.source_degraded(&source_name, retry_delay.as_millis() as u64);
                 warn!(event = "source.retrying", source = source.name(), error = %format!("{error:#}"), retry_delay_ms = retry_delay.as_millis(), "Event source failed; reconnecting");
                 tokio::select! {
                     _ = cancellation.cancelled() => break,
@@ -232,7 +243,7 @@ async fn run_source(
             }
         }
     }
-    health.source_stopped(degraded);
+    health.source_stopped(&source_name);
     info!(
         event = "source.stopped",
         source = source.name(),
@@ -241,15 +252,21 @@ async fn run_source(
     );
 }
 
-async fn persist(directory: &Path, incident: Incident, health: &WatchHealth) -> Result<()> {
+async fn persist(
+    directory: &Path,
+    source: &str,
+    incident: Incident,
+    health: &WatchHealth,
+) -> Result<()> {
     health.dequeued();
     let (destination, created) = save_incident(directory, &incident).await?;
     if !created {
-        health.grouped();
+        health.deduplicated(source);
         info!(event = "incident.grouped", incident_id = %incident.id, "Incident grouped with an active failure");
         return Ok(());
     }
     health.persisted();
+    watch_health::publish(directory, &health.snapshot(None)).await?;
     info!(event = "incident.persisted", incident_id = %incident.id, kind = ?incident.kind, "New incident persisted");
     println!("DETECTED: {:?}: {}", incident.kind, incident.message);
     println!("Incident saved to {}", destination.display());
@@ -354,7 +371,10 @@ mod tests {
             .await
             .expect("source task did not stop")
             .unwrap();
-        assert_eq!(health.snapshot().active_sources, 0);
+        assert_eq!(
+            health.snapshot(None).sources[0].state,
+            crate::watch_health::SourceState::Disconnected
+        );
     }
 
     #[tokio::test]
@@ -369,17 +389,20 @@ mod tests {
             cancellation.clone(),
         ));
         for _ in 0..20 {
-            if health.snapshot().queue_depth == 1 {
+            if health.snapshot(None).queue_depth == 1 {
                 break;
             }
             tokio::task::yield_now().await;
         }
-        assert_eq!(health.snapshot().queue_depth, 1);
+        assert_eq!(health.snapshot(None).queue_depth, 1);
         cancellation.cancel();
         tokio::time::timeout(Duration::from_secs(1), task)
             .await
             .expect("backpressured source did not stop")
             .unwrap();
-        assert_eq!(health.snapshot().active_sources, 0);
+        assert_eq!(
+            health.snapshot(None).sources[0].state,
+            crate::watch_health::SourceState::Disconnected
+        );
     }
 }
