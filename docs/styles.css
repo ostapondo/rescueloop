@@ -6,7 +6,7 @@
   --line: #303536;
   --orange: #ff6b35;
   --green: #69c27d;
-  --sans: "Arial Narrow", "Roboto Condensed", "Helvetica Neue", sans-serif;
+  --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
@@ -64,8 +64,8 @@ nav a:hover, footer a:hover { color: var(--orange); }
 .hero-copy { border-right: 1px solid var(--line); }
 .eyebrow { margin: 0 0 clamp(2rem, 5vw, 4rem); color: var(--muted); font-size: .74rem; text-transform: uppercase; letter-spacing: .055em; }
 .eyebrow span { color: var(--orange); margin-right: 1.4rem; font-weight: 700; }
-h1, h2 { font-family: var(--sans); text-transform: uppercase; line-height: .95; letter-spacing: -.035em; }
-h1 { margin: 0; font-size: clamp(3.2rem, 4.5vw, 4.4rem); max-width: 12ch; }
+h1, h2 { font-family: var(--sans); text-transform: uppercase; line-height: .92; letter-spacing: -.045em; }
+h1 { margin: 0; font-size: clamp(3rem, 4.2vw, 4.15rem); max-width: 13ch; font-weight: 780; font-stretch: normal; }
 h1 em { color: var(--orange); font-style: normal; }
 .lede { max-width: 35rem; margin: 1.7rem 0 1rem; color: #c5c3bd; font-size: clamp(.94rem, 1.1vw, 1.08rem); }
 .platforms { color: var(--muted); font-size: .8rem; }
