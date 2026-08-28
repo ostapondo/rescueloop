@@ -202,6 +202,11 @@ fn effective_shutdown_reason(
         snapshot
             .shutdown_reason
             .clone()
+            .or_else(|| {
+                running
+                    .then(|| snapshot.last_shutdown_reason.clone())
+                    .flatten()
+            })
             .or_else(|| (!running).then(|| "abnormal_or_interrupted".into()))
     })
 }
@@ -273,6 +278,7 @@ mod tests {
             started_at: Utc::now(),
             updated_at: Utc::now(),
             shutdown_reason: None,
+            last_shutdown_reason: Some("clean_shutdown".into()),
             sources: vec![SourceSnapshot {
                 name: "fixture".into(),
                 state: SourceState::Healthy,
@@ -305,6 +311,9 @@ mod tests {
             effective_shutdown_reason(Some(&snapshot), false).as_deref(),
             Some("abnormal_or_interrupted")
         );
-        assert_eq!(effective_shutdown_reason(Some(&snapshot), true), None);
+        assert_eq!(
+            effective_shutdown_reason(Some(&snapshot), true).as_deref(),
+            Some("clean_shutdown")
+        );
     }
 }

@@ -33,6 +33,12 @@ pub async fn run(directory: &Path, log_health: crate::logging::LogHealth) -> Res
 
     let (sender, mut events) = mpsc::channel(EVENT_QUEUE_CAPACITY);
     let health = Arc::new(WatchHealth::new(EVENT_QUEUE_CAPACITY));
+    let previous_shutdown = watch_health::load(directory).await?.map(|snapshot| {
+        snapshot
+            .shutdown_reason
+            .unwrap_or_else(|| "abnormal_or_interrupted".into())
+    });
+    health.set_last_shutdown_reason(previous_shutdown);
     health.set_log_health(log_health.write_errors(), log_health.export_drops());
     watch_health::publish(directory, &health.snapshot(None)).await?;
     let cancellation = CancellationToken::new();

@@ -44,6 +44,8 @@ pub struct Snapshot {
     pub started_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub shutdown_reason: Option<String>,
+    #[serde(default)]
+    pub last_shutdown_reason: Option<String>,
     pub sources: Vec<SourceSnapshot>,
     pub received: u64,
     pub persisted: u64,
@@ -80,6 +82,7 @@ pub struct WatchHealth {
     queue_depth: AtomicUsize,
     log_write_errors: AtomicU64,
     log_export_drops: AtomicU64,
+    last_shutdown_reason: Mutex<Option<String>>,
 }
 
 impl Default for WatchHealth {
@@ -101,6 +104,7 @@ impl WatchHealth {
             queue_depth: AtomicUsize::new(0),
             log_write_errors: AtomicU64::new(0),
             log_export_drops: AtomicU64::new(0),
+            last_shutdown_reason: Mutex::new(None),
         }
     }
 
@@ -154,6 +158,12 @@ impl WatchHealth {
         self.log_write_errors.store(write_errors, Ordering::Relaxed);
         self.log_export_drops.store(export_drops, Ordering::Relaxed);
     }
+    pub fn set_last_shutdown_reason(&self, reason: Option<String>) {
+        *self
+            .last_shutdown_reason
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = reason;
+    }
 
     pub fn snapshot(&self, shutdown_reason: Option<String>) -> Snapshot {
         let sources = self
@@ -179,6 +189,11 @@ impl WatchHealth {
             started_at: self.started_at,
             updated_at: Utc::now(),
             shutdown_reason,
+            last_shutdown_reason: self
+                .last_shutdown_reason
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone(),
             sources,
             received: self.received.load(Ordering::Relaxed),
             persisted: self.persisted.load(Ordering::Relaxed),
