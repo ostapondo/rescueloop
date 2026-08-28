@@ -49,6 +49,7 @@ pub async fn run(directory: &Path) -> Result<()> {
             sender.clone(),
             Arc::clone(&health),
             cancellation.clone(),
+            directory.to_path_buf(),
         ));
     }
     drop(sender);
@@ -193,9 +194,11 @@ async fn run_source(
     sender: mpsc::Sender<(String, Incident)>,
     health: Arc<WatchHealth>,
     cancellation: CancellationToken,
+    incident_dir: std::path::PathBuf,
 ) {
     let source_name = source.name().to_owned();
     health.source_started(&source_name);
+    let _ = watch_health::publish(&incident_dir, &health.snapshot(None)).await;
     info!(
         event = "source.started",
         source = source.name(),
@@ -234,6 +237,7 @@ async fn run_source(
             Err(error) => {
                 degraded = true;
                 health.source_degraded(&source_name, retry_delay.as_millis() as u64);
+                let _ = watch_health::publish(&incident_dir, &health.snapshot(None)).await;
                 warn!(event = "source.retrying", source = source.name(), error = %format!("{error:#}"), retry_delay_ms = retry_delay.as_millis(), "Event source failed; reconnecting");
                 tokio::select! {
                     _ = cancellation.cancelled() => break,
@@ -244,6 +248,7 @@ async fn run_source(
         }
     }
     health.source_stopped(&source_name);
+    let _ = watch_health::publish(&incident_dir, &health.snapshot(None)).await;
     info!(
         event = "source.stopped",
         source = source.name(),
@@ -262,6 +267,7 @@ async fn persist(
     let (destination, created) = save_incident(directory, &incident).await?;
     if !created {
         health.deduplicated(source);
+        watch_health::publish(directory, &health.snapshot(None)).await?;
         info!(event = "incident.grouped", incident_id = %incident.id, "Incident grouped with an active failure");
         return Ok(());
     }
@@ -364,6 +370,9 @@ mod tests {
             sender,
             Arc::clone(&health),
             cancellation.clone(),
+            std::env::temp_dir()
+                .join(format!("rescueloop-source-health-{}", uuid::Uuid::new_v4()))
+                .join("incidents"),
         ));
         tokio::task::yield_now().await;
         cancellation.cancel();
@@ -387,13 +396,17 @@ mod tests {
             sender,
             Arc::clone(&health),
             cancellation.clone(),
+            std::env::temp_dir()
+                .join(format!("rescueloop-source-health-{}", uuid::Uuid::new_v4()))
+                .join("incidents"),
         ));
-        for _ in 0..20 {
-            if health.snapshot(None).queue_depth == 1 {
-                break;
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while health.snapshot(None).queue_depth != 1 {
+                tokio::task::yield_now().await;
             }
-            tokio::task::yield_now().await;
-        }
+        })
+        .await
+        .expect("source did not fill the bounded queue");
         assert_eq!(health.snapshot(None).queue_depth, 1);
         cancellation.cancel();
         tokio::time::timeout(Duration::from_secs(1), task)

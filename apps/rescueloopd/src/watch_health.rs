@@ -237,4 +237,30 @@ mod tests {
         assert_eq!(snapshot.queue_depth, 0);
         assert_eq!(snapshot.queue_capacity, 256);
     }
+
+    #[tokio::test]
+    async fn persists_and_rejects_oversized_health_snapshots() {
+        let root = std::env::temp_dir().join(format!("rescueloop-health-{}", uuid::Uuid::new_v4()));
+        let incidents = root.join("incidents");
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let health = WatchHealth::new(8);
+        health.source_started("fixture");
+        super::publish(&incidents, &health.snapshot(None))
+            .await
+            .unwrap();
+        assert_eq!(
+            super::load(&incidents)
+                .await
+                .unwrap()
+                .unwrap()
+                .queue_capacity,
+            8
+        );
+
+        let path = root.join(super::WATCH_HEALTH_FILENAME);
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(super::MAX_WATCH_HEALTH_BYTES + 1).unwrap();
+        assert!(super::load(&incidents).await.is_err());
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
 }
