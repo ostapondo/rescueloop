@@ -5,6 +5,7 @@
 
 # RescueLoop local runtime state
 /.rescueloop/
+/graphify-out/
 
 # Local environment and editor files
 .env
