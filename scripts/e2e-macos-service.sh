@@ -17,6 +17,12 @@ trap cleanup EXIT INT TERM
 mkdir -p "$task_home/Library/LaunchAgents"
 cargo build --quiet -p rescueloop
 
+# Model an npm package directory that may disappear during an upgrade.
+package_v1="$task_root/node_modules/rescueloop/native"
+mkdir -p "$package_v1"
+cp "$binary" "$package_v1/rescueloop-darwin"
+package_binary="$package_v1/rescueloop-darwin"
+
 wait_for_health() {
   expected="$1"
   for _ in $(seq 1 50); do
@@ -35,7 +41,14 @@ wait_for_health() {
   return 1
 }
 
-HOME="$task_home" "$binary" --incident-dir "$incident_dir" service install
+HOME="$task_home" "$package_binary" --incident-dir "$incident_dir" service install
+wait_for_health healthy
+stable_binary="$task_home/.local/bin/rescueloop"
+test -x "$stable_binary"
+plist_binary=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$plist")
+test "$plist_binary" = "$stable_binary"
+rm -rf "$task_root/node_modules"
+HOME="$task_home" "$stable_binary" restart
 wait_for_health healthy
 first_pid=$(jq -r '.pid' "$task_root/state/watch-health-v1.json")
 

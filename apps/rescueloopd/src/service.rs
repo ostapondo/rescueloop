@@ -12,14 +12,31 @@ pub struct ServiceSnapshot {
 const LABEL: &str = "dev.rescueloop.agent";
 
 pub async fn install(incident_dir: &Path) -> Result<()> {
-    install_using(incident_dir, None).await
+    let source = std::env::current_exe().context("cannot resolve RescueLoop executable")?;
+    let destination = stable_install_path()?;
+    if source != destination && is_installed()? {
+        stop().await?;
+    }
+    let executable = install_to_path().await?;
+    install_using(incident_dir, Some(&executable)).await
 }
 
 /// Ensure the per-user watcher is registered and running. This is intentionally
 /// idempotent so the interactive entry point can call it on every launch.
 pub async fn ensure_started(incident_dir: &Path) -> Result<()> {
     if is_installed()? {
-        start().await
+        let source = std::env::current_exe().context("cannot resolve RescueLoop executable")?;
+        let destination = stable_install_path()?;
+        if source == destination {
+            start().await
+        } else {
+            // Package managers may replace their own installation directory while
+            // the watcher is alive. Stop first (required by Windows file locking),
+            // refresh the stable copy, and atomically recreate the registration.
+            stop().await?;
+            let executable = install_to_path().await?;
+            install_using(incident_dir, Some(&executable)).await
+        }
     } else {
         install(incident_dir).await
     }
@@ -41,12 +58,14 @@ pub async fn install_using(incident_dir: &Path, executable: Option<&Path>) -> Re
 
 pub async fn install_to_path() -> Result<PathBuf> {
     let source = std::env::current_exe().context("cannot resolve RescueLoop executable")?;
+    let destination = stable_install_path()?;
     #[cfg(target_os = "macos")]
     {
         let home = PathBuf::from(std::env::var_os("HOME").context("HOME is unavailable")?);
-        let bin = home.join(".local/bin");
+        let bin = destination
+            .parent()
+            .context("stable install path has no parent")?;
         fs::create_dir_all(&bin).await?;
-        let destination = bin.join("rescueloop");
         if source != destination {
             fs::copy(&source, &destination).await?;
         }
@@ -58,11 +77,10 @@ pub async fn install_to_path() -> Result<PathBuf> {
     }
     #[cfg(target_os = "windows")]
     {
-        let local =
-            PathBuf::from(std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA is unavailable")?);
-        let bin = local.join("RescueLoop").join("bin");
+        let bin = destination
+            .parent()
+            .context("stable install path has no parent")?;
         fs::create_dir_all(&bin).await?;
-        let destination = bin.join("rescueloop.exe");
         if source != destination {
             fs::copy(&source, &destination).await?;
         }
@@ -83,6 +101,21 @@ pub async fn install_to_path() -> Result<PathBuf> {
         }
         Ok(destination)
     }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    bail!("PATH installation currently supports macOS and Windows")
+}
+
+fn stable_install_path() -> Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    return Ok(
+        PathBuf::from(std::env::var_os("HOME").context("HOME is unavailable")?)
+            .join(".local/bin/rescueloop"),
+    );
+    #[cfg(target_os = "windows")]
+    return Ok(PathBuf::from(
+        std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA is unavailable")?,
+    )
+    .join("RescueLoop/bin/rescueloop.exe"));
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     bail!("PATH installation currently supports macOS and Windows")
 }
