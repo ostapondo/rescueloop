@@ -2,6 +2,12 @@ use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use tokio::{fs, process::Command};
 
+#[derive(Clone, Copy, Debug)]
+pub struct ServiceSnapshot {
+    pub installed: bool,
+    pub running: bool,
+}
+
 #[cfg(target_os = "macos")]
 const LABEL: &str = "dev.rescueloop.agent";
 
@@ -258,6 +264,12 @@ async fn is_running() -> Result<bool> {
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     Ok(false)
+}
+
+pub async fn snapshot() -> Result<ServiceSnapshot> {
+    let installed = is_installed()?;
+    let running = installed && is_running().await?;
+    Ok(ServiceSnapshot { installed, running })
 }
 
 #[allow(clippy::needless_return)]

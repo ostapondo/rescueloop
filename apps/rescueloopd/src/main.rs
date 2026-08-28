@@ -7,6 +7,7 @@ use tokio::fs;
 use tracing::{error, info};
 
 mod console;
+mod doctor;
 mod incident_store;
 mod logging;
 mod mcp;
@@ -45,6 +46,8 @@ enum Command {
     Stop,
     /// Show whether the background watcher is installed and running.
     Status,
+    /// Explain the health of RescueLoop, its event sources, and local state.
+    Doctor,
     /// Restart the background watcher.
     Restart,
     /// Stop and remove the background watcher registration.
@@ -166,7 +169,7 @@ enum LogOutput {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     storage::prepare_state_store(&cli.incident_dir)?;
-    let _log_guard = logging::init(&cli.incident_dir)?;
+    let log_guard = logging::init(&cli.incident_dir)?;
     let command = cli.command.as_ref().map_or("start", Command::name);
     info!(
         event = "runtime.started",
@@ -176,13 +179,13 @@ async fn main() -> Result<()> {
         "RescueLoop started"
     );
     logging::trigger_test_panic_if_requested();
-    let result = run(cli).await;
+    let result = run(cli, &log_guard).await;
     match &result {
         Ok(()) => info!(
             event = "runtime.stopped",
             command,
-            log_write_errors = _log_guard.write_errors(),
-            log_export_drops = _log_guard.export_drops(),
+            log_write_errors = log_guard.write_errors(),
+            log_export_drops = log_guard.export_drops(),
             "RescueLoop stopped"
         ),
         Err(error) => error!(
@@ -195,7 +198,7 @@ async fn main() -> Result<()> {
     result
 }
 
-async fn run(cli: Cli) -> Result<()> {
+async fn run(cli: Cli, log_guard: &logging::LogGuard) -> Result<()> {
     match cli.command {
         None | Some(Command::Start) => {
             service::ensure_started(&cli.incident_dir).await?;
@@ -203,6 +206,7 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Some(Command::Stop) => service::stop().await,
         Some(Command::Status) => service::status().await,
+        Some(Command::Doctor) => doctor::run(&cli.incident_dir, log_guard).await,
         Some(Command::Restart) => service::restart().await,
         Some(Command::Uninstall) => service::uninstall().await,
         Some(Command::Mcp) => mcp::serve(&cli.incident_dir).await,
@@ -296,6 +300,7 @@ impl Command {
             Self::Start => "start",
             Self::Stop => "stop",
             Self::Status => "status",
+            Self::Doctor => "doctor",
             Self::Restart => "restart",
             Self::Uninstall => "uninstall",
             Self::Mcp => "mcp",
@@ -449,6 +454,7 @@ mod cli_tests {
             ("start", "start"),
             ("stop", "stop"),
             ("status", "status"),
+            ("doctor", "doctor"),
             ("restart", "restart"),
             ("uninstall", "uninstall"),
         ] {
