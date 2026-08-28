@@ -13,6 +13,7 @@ use std::{
 use crate::storage;
 
 pub const WATCH_HEALTH_SCHEMA_VERSION: u16 = 1;
+pub const RUNTIME_CONTRACT_VERSION: u16 = 1;
 const WATCH_HEALTH_FILENAME: &str = "watch-health-v1.json";
 const MAX_WATCH_HEALTH_BYTES: u64 = 256 * 1024;
 
@@ -47,6 +48,12 @@ pub struct Snapshot {
     #[serde(default)]
     pub last_shutdown_reason: Option<String>,
     pub sources: Vec<SourceSnapshot>,
+    #[serde(default)]
+    pub runtime_contract_version: u16,
+    #[serde(default)]
+    pub source_workers_isolated: bool,
+    #[serde(default)]
+    pub accepted: u64,
     pub received: u64,
     pub persisted: u64,
     #[serde(default)]
@@ -54,6 +61,12 @@ pub struct Snapshot {
     pub deduplicated: u64,
     pub queue_depth: usize,
     pub queue_capacity: usize,
+    #[serde(default)]
+    pub queue_overflow_count: u64,
+    #[serde(default)]
+    pub shutdown_deadline_ms: u64,
+    #[serde(default)]
+    pub last_shutdown_duration_ms: Option<u64>,
     #[serde(default)]
     pub log_write_errors: u64,
     #[serde(default)]
@@ -78,13 +91,16 @@ pub struct WatchHealth {
     queue_capacity: usize,
     sources: Mutex<BTreeMap<String, SourceHealth>>,
     received: AtomicU64,
+    accepted: AtomicU64,
     persisted: AtomicU64,
     grouped: AtomicU64,
     deduplicated: AtomicU64,
     queue_depth: AtomicUsize,
+    queue_overflow_count: AtomicU64,
     log_write_errors: AtomicU64,
     log_export_drops: AtomicU64,
     last_shutdown_reason: Mutex<Option<String>>,
+    last_shutdown_duration_ms: Mutex<Option<u64>>,
     publish_lock: tokio::sync::Mutex<()>,
 }
 
@@ -101,13 +117,16 @@ impl WatchHealth {
             queue_capacity,
             sources: Mutex::new(BTreeMap::new()),
             received: AtomicU64::new(0),
+            accepted: AtomicU64::new(0),
             persisted: AtomicU64::new(0),
             grouped: AtomicU64::new(0),
             deduplicated: AtomicU64::new(0),
             queue_depth: AtomicUsize::new(0),
+            queue_overflow_count: AtomicU64::new(0),
             log_write_errors: AtomicU64::new(0),
             log_export_drops: AtomicU64::new(0),
             last_shutdown_reason: Mutex::new(None),
+            last_shutdown_duration_ms: Mutex::new(None),
             publish_lock: tokio::sync::Mutex::new(()),
         }
     }
@@ -131,6 +150,9 @@ impl WatchHealth {
             s.backoff_ms = 0;
         });
     }
+    pub fn observation_accepted(&self) {
+        self.accepted.fetch_add(1, Ordering::Relaxed);
+    }
     pub fn source_stopped(&self, name: &str) {
         self.update_source(name, |s| {
             s.state = Some(SourceState::Disconnected);
@@ -153,7 +175,15 @@ impl WatchHealth {
         });
     }
     pub fn queued(&self) {
-        self.queue_depth.fetch_add(1, Ordering::Relaxed);
+        if self
+            .queue_depth
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                (current < self.queue_capacity).then_some(current + 1)
+            })
+            .is_err()
+        {
+            self.queue_overflow_count.fetch_add(1, Ordering::Relaxed);
+        }
     }
     pub fn dequeued(&self) {
         saturating_decrement(&self.queue_depth);
@@ -167,6 +197,12 @@ impl WatchHealth {
             .last_shutdown_reason
             .lock()
             .unwrap_or_else(|error| error.into_inner()) = reason;
+    }
+    pub fn set_last_shutdown_duration_ms(&self, duration_ms: Option<u64>) {
+        *self
+            .last_shutdown_duration_ms
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = duration_ms;
     }
 
     pub fn snapshot(&self, shutdown_reason: Option<String>) -> Snapshot {
@@ -199,12 +235,21 @@ impl WatchHealth {
                 .unwrap_or_else(|error| error.into_inner())
                 .clone(),
             sources,
+            runtime_contract_version: RUNTIME_CONTRACT_VERSION,
+            source_workers_isolated: true,
+            accepted: self.accepted.load(Ordering::Relaxed),
             received: self.received.load(Ordering::Relaxed),
             persisted: self.persisted.load(Ordering::Relaxed),
             grouped: self.grouped.load(Ordering::Relaxed),
             deduplicated: self.deduplicated.load(Ordering::Relaxed),
             queue_depth: self.queue_depth.load(Ordering::Relaxed),
             queue_capacity: self.queue_capacity,
+            queue_overflow_count: self.queue_overflow_count.load(Ordering::Relaxed),
+            shutdown_deadline_ms: crate::watcher::SHUTDOWN_DEADLINE.as_millis() as u64,
+            last_shutdown_duration_ms: *self
+                .last_shutdown_duration_ms
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
             log_write_errors: self.log_write_errors.load(Ordering::Relaxed),
             log_export_drops: self.log_export_drops.load(Ordering::Relaxed),
             metrics: crate::metrics::registry().snapshot(),
@@ -275,6 +320,7 @@ mod tests {
         health.source_started("docker");
         health.source_degraded("docker", 2_000);
         health.observation_received("docker");
+        health.observation_accepted();
         health.queued();
         health.dequeued();
         health.persisted();
@@ -284,10 +330,22 @@ mod tests {
         assert_eq!(snapshot.sources[0].reconnect_count, 1);
         assert_eq!(snapshot.sources[0].backoff_ms, 0);
         assert_eq!(snapshot.received, 1);
+        assert_eq!(snapshot.accepted, 1);
         assert_eq!(snapshot.persisted, 1);
         assert_eq!(snapshot.deduplicated, 1);
         assert_eq!(snapshot.queue_depth, 0);
         assert_eq!(snapshot.queue_capacity, 256);
+        assert_eq!(snapshot.queue_overflow_count, 0);
+    }
+
+    #[test]
+    fn queue_depth_is_bounded_and_records_contract_violations() {
+        let health = WatchHealth::new(1);
+        health.queued();
+        health.queued();
+        let snapshot = health.snapshot(None);
+        assert_eq!(snapshot.queue_depth, 1);
+        assert_eq!(snapshot.queue_overflow_count, 1);
     }
 
     #[test]

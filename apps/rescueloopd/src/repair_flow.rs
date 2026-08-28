@@ -483,12 +483,6 @@ async fn repair_impl(
             )
             .await?;
             rescueloop_repair::finalize(&mut transaction, true).await?;
-            let receipt = rescueloop_repair::persist(&transaction, &transaction_root).await?;
-            report!(
-                "VERIFIED: original action now succeeds ({} ms).",
-                result.duration_ms
-            );
-            report!("Transaction receipt: {}", receipt.display());
             record_repair_lineage(
                 incident_dir,
                 &incident,
@@ -498,6 +492,13 @@ async fn repair_impl(
                 verbose,
             )
             .await?;
+            // Publish the terminal receipt only after its append-only lineage exists.
+            let receipt = rescueloop_repair::persist(&transaction, &transaction_root).await?;
+            report!(
+                "VERIFIED: original action now succeeds ({} ms).",
+                result.duration_ms
+            );
+            report!("Transaction receipt: {}", receipt.display());
             tracing::info!(
                 event = "repair.verified",
                 incident_id = %incident.id,
@@ -574,11 +575,6 @@ async fn repair_impl(
                 rescueloop_core::IncidentStatus::RolledBack,
             )
             .await?;
-            let receipt = rescueloop_repair::persist(&transaction, &transaction_root).await?;
-            report!(
-                "ROLLED BACK: verification failed ({replay_message}); original state restored."
-            );
-            report!("Transaction receipt: {}", receipt.display());
             record_repair_lineage(
                 incident_dir,
                 &incident,
@@ -588,6 +584,12 @@ async fn repair_impl(
                 verbose,
             )
             .await?;
+            // Publish the terminal receipt only after its append-only lineage exists.
+            let receipt = rescueloop_repair::persist(&transaction, &transaction_root).await?;
+            report!(
+                "ROLLED BACK: verification failed ({replay_message}); original state restored."
+            );
+            report!("Transaction receipt: {}", receipt.display());
             tracing::warn!(
                 event = "repair.rolled_back",
                 incident_id = %incident.id,
@@ -647,7 +649,13 @@ async fn record_repair_lineage(
         &ledger_path(incident_dir),
         rescueloop_ledger::NewLedgerEntry {
             incident: incident.clone(),
-            repair: Some(serde_json::to_value(&transaction.action)?),
+            repair: Some(serde_json::json!({
+                "repair_transaction_id": transaction.id,
+                "analysis_id": transaction.analysis_id,
+                "plan_id": transaction.plan_id,
+                "verification_id": transaction.verification_id,
+                "action": transaction.action,
+            })),
             before_state: Some(serde_json::json!({"original": transaction.original})),
             after_state: Some(serde_json::json!({"backup": transaction.backup, "transaction_state": transaction.state})),
             verifier: Some(verifier),

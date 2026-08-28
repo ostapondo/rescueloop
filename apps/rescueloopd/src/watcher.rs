@@ -13,7 +13,7 @@ use crate::{
 };
 
 const EVENT_QUEUE_CAPACITY: usize = 256;
-const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const SHUTDOWN_DEADLINE: Duration = Duration::from_secs(30);
 
 pub async fn run(directory: &Path, log_health: crate::logging::LogHealth) -> Result<()> {
     tokio::fs::create_dir_all(directory).await?;
@@ -34,12 +34,15 @@ pub async fn run(directory: &Path, log_health: crate::logging::LogHealth) -> Res
 
     let (sender, mut events) = mpsc::channel(EVENT_QUEUE_CAPACITY);
     let health = Arc::new(WatchHealth::new(EVENT_QUEUE_CAPACITY));
-    let previous_shutdown = match watch_health::load(directory).await {
-        Ok(snapshot) => snapshot.map(|snapshot| {
+    let previous_snapshot = watch_health::load(directory).await;
+    let previous_shutdown = match &previous_snapshot {
+        Ok(Some(snapshot)) => Some(
             snapshot
                 .shutdown_reason
-                .unwrap_or_else(|| "abnormal_or_interrupted".into())
-        }),
+                .clone()
+                .unwrap_or_else(|| "abnormal_or_interrupted".into()),
+        ),
+        Ok(None) => None,
         Err(_) => {
             warn!(
                 event = "watch.health_snapshot_invalid",
@@ -50,6 +53,12 @@ pub async fn run(directory: &Path, log_health: crate::logging::LogHealth) -> Res
         }
     };
     health.set_last_shutdown_reason(previous_shutdown);
+    health.set_last_shutdown_duration_ms(
+        previous_snapshot
+            .ok()
+            .flatten()
+            .and_then(|snapshot| snapshot.last_shutdown_duration_ms),
+    );
     health.set_log_health(log_health.write_errors(), log_health.export_drops());
     registry().set_log_write_failures(log_health.write_errors());
     health.publish_to(directory, None).await?;
@@ -108,32 +117,39 @@ pub async fn run(directory: &Path, log_health: crate::logging::LogHealth) -> Res
         Ok(exhausted) => (exhausted, None),
         Err(error) => (false, Some(error)),
     };
+    let shutdown_started = std::time::Instant::now();
     if failure.is_none() {
-        let drain = async {
+        let shutdown = async {
             while let Some((source, incident)) = events.recv().await {
                 persist(directory, &source, incident, &health).await?;
             }
+            while let Some(result) = tasks.join_next().await {
+                result?;
+            }
             Ok::<_, anyhow::Error>(())
         };
-        match tokio::time::timeout(SHUTDOWN_DRAIN_TIMEOUT, drain).await {
+        match tokio::time::timeout(SHUTDOWN_DEADLINE, shutdown).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => failure = Some(error),
             Err(_) => {
+                tasks.abort_all();
                 warn!(
-                    event = "watch.drain_timeout",
+                    event = "watch.shutdown_deadline_exceeded",
                     queue_depth = health.snapshot(None).queue_depth,
-                    "Watcher shutdown drain timed out"
+                    "Watcher shutdown deadline exceeded"
                 );
-                failure = Some(anyhow::anyhow!("watcher shutdown drain timed out"));
+                failure = Some(anyhow::anyhow!("watcher shutdown deadline exceeded"));
             }
         }
+    } else {
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
     }
-    while let Some(result) = tasks.join_next().await {
-        if let Err(error) = result
-            && failure.is_none()
-        {
-            failure = Some(error.into());
-        }
+    let shutdown_duration_ms = shutdown_started.elapsed().as_millis() as u64;
+    health.set_last_shutdown_duration_ms(Some(shutdown_duration_ms));
+
+    if shutdown_duration_ms > SHUTDOWN_DEADLINE.as_millis() as u64 && failure.is_none() {
+        failure = Some(anyhow::anyhow!("watcher shutdown deadline exceeded"));
     }
 
     if let Some(error) = failure {
@@ -248,6 +264,19 @@ async fn run_source(
                 info!(event = "observation.received", source = source.name(), observation_id = %incident.observation_id(), incident_id = %incident.incident_id(), occurrence_id = %incident.occurrence_id(), kind = ?incident.kind, "Failure observation received");
                 health.observation_received(&source_name);
                 registry().event_received(EventSource::from_name(&source_name));
+                if let Err(error) =
+                    crate::observation_journal::begin(&incident_dir, &incident).await
+                {
+                    health.dropped(&source_name);
+                    registry().event_dropped(DropReason::PersistenceFailed);
+                    error!(
+                        event = "observation.journal_failed",
+                        source = source.name(),
+                        error = %format!("{error:#}"),
+                        "Observation was not accepted because durable journaling failed"
+                    );
+                    break;
+                }
                 let permit = tokio::select! {
                     _ = cancellation.cancelled() => {
                         registry().event_dropped(DropReason::Shutdown);
@@ -266,6 +295,7 @@ async fn run_source(
                     break;
                 };
                 health.queued();
+                health.observation_accepted();
                 registry().set_queue_depth(health.snapshot(None).queue_depth);
                 permit.send((source_name.clone(), incident));
             }
