@@ -13,6 +13,10 @@ pub use query::{LogOutput, LogQuery, run as query};
 pub(crate) use writer::LogHealth;
 use writer::{RollingWriter, WriterConfig};
 
+pub(crate) fn redaction_probe() -> (usize, usize) {
+    writer::redaction_probe()
+}
+
 const DEFAULT_FILTER: &str = "info,hyper=warn,reqwest=warn,rustls=warn";
 const DEFAULT_RETENTION_DAYS: usize = 14;
 const DEFAULT_MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
