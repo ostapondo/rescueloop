@@ -96,6 +96,11 @@ async fn read_bounded_document(path: &Path, limit: u64) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+pub(crate) async fn read_incident_document(path: &Path) -> Result<Incident> {
+    let bytes = read_bounded_document(path, MAX_INCIDENT_DOCUMENT_BYTES).await?;
+    serde_json::from_slice(&bytes).context("invalid incident JSON")
+}
+
 async fn incident_json_paths(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     let Ok(mut entries) = fs::read_dir(dir).await else {
@@ -230,7 +235,7 @@ async fn apply_observation(dir: &Path, incident: &Incident) -> Result<(PathBuf, 
         .iter()
         .find(|(candidate, _)| candidate.last_occurrence_id == Some(incident.id))
     {
-        ensure_initial_lineage(dir, existing).await?;
+        crate::timeline::ensure_initial(dir, existing).await?;
         return Ok((path.clone(), SaveOutcome::Duplicate));
     }
     if let Some((mut existing, path)) = candidates.into_iter().find(|(candidate, _)| {
@@ -266,6 +271,21 @@ async fn apply_observation(dir: &Path, incident: &Incident) -> Result<(PathBuf, 
         {
             tracing::warn!(%error, "incident JSON saved but disposable index update failed");
         }
+        crate::timeline::record(
+            dir,
+            &existing,
+            crate::timeline::EventSpec {
+                correlation_id: Some(incident.correlation_id()),
+                component: rescueloop_ledger::TimelineComponent::Grouper,
+                transition: rescueloop_ledger::TimelineTransition::Grouped,
+                outcome: rescueloop_ledger::TimelineOutcome::Completed,
+                explanation: "Occurrence grouped with the active incident",
+                reason: None,
+                status: existing.status.clone(),
+                occurred_at: incident.observed_at,
+            },
+        )
+        .await?;
         return Ok((path, SaveOutcome::Grouped));
     }
     let mut incident = incident.clone();
@@ -290,7 +310,7 @@ async fn apply_observation(dir: &Path, incident: &Incident) -> Result<(PathBuf, 
     {
         tracing::warn!(%error, "incident JSON saved but disposable index update failed");
     }
-    ensure_initial_lineage(dir, &incident).await?;
+    crate::timeline::ensure_initial(dir, &incident).await?;
     Ok((destination, SaveOutcome::Created))
 }
 
@@ -303,35 +323,6 @@ fn abort_after_occurrence_if_requested() {
 
 #[cfg(not(debug_assertions))]
 fn abort_after_occurrence_if_requested() {}
-
-async fn ensure_initial_lineage(dir: &Path, incident: &Incident) -> Result<()> {
-    let ledger = ledger_path(dir);
-    let entry = rescueloop_ledger::append_if_missing(
-        &ledger,
-        rescueloop_ledger::NewLedgerEntry {
-            incident: incident.clone(),
-            repair: None,
-            before_state: None,
-            after_state: None,
-            verifier: None,
-            status: incident.status.clone(),
-            relation_override: None,
-            timeline: None,
-        },
-    )
-    .await?;
-    let Some(entry) = entry else {
-        return Ok(());
-    };
-    tracing::info!(
-        event = "lineage.appended",
-        incident_id = %incident.id,
-        relation = ?entry.relation,
-        "Incident lineage appended"
-    );
-    println!("LINEAGE: {:?}", entry.relation);
-    Ok(())
-}
 
 struct StoreLock(File);
 
