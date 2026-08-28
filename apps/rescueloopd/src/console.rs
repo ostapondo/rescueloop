@@ -407,6 +407,7 @@ pub(crate) async fn index_command(incident_dir: &Path, action: IndexAction) -> R
         }
         IndexAction::Rebuild => {
             let count = index.rebuild().await?;
+            crate::metrics::registry().index_rebuilt();
             println!("Rebuilt index from {count} versioned JSON incident(s).");
             println!("No source JSON was modified.");
         }

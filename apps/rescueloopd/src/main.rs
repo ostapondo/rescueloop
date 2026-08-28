@@ -196,6 +196,7 @@ async fn main() -> Result<()> {
             "RescueLoop failed"
         ),
     }
+    metrics::registry().set_log_write_failures(log_guard.write_errors());
     result
 }
 
@@ -355,7 +356,10 @@ async fn replay(path: &Path) -> Result<()> {
     let context = incident
         .launch_context
         .context("incident has no launch context")?;
-    let result = rescueloop_platform::verify_replay(&context).await?;
+    let result = {
+        let _verification_timer = metrics::registry().timer(metrics::DurationKind::Verification);
+        rescueloop_platform::verify_replay(&context).await?
+    };
     info!(
         event = "verification.completed",
         incident_id = %incident.id,
@@ -394,6 +398,7 @@ pub(crate) async fn analyze_with_provider(
     provider: &dyn AnalysisProvider,
     output: Option<&Path>,
 ) -> Result<rescueloop_core::AnalysisResponse> {
+    let _analysis_timer = metrics::registry().timer(metrics::DurationKind::Analysis);
     let incident: Incident =
         serde_json::from_slice(&fs::read(path).await.context("cannot read incident")?)
             .context("invalid incident JSON")?;

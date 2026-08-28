@@ -29,6 +29,8 @@ pub async fn begin(incident_dir: &Path, incident: &Incident) -> Result<PathBuf> 
         incident: incident.clone(),
     };
     storage::create_durable(&path, &serde_json::to_vec(&value)?).await?;
+    let count = pending(incident_dir).await?.len();
+    crate::metrics::registry().set_journal_pending_count(count);
     Ok(path)
 }
 
@@ -72,11 +74,21 @@ pub async fn pending(incident_dir: &Path) -> Result<Vec<Pending>> {
             incident: value.incident,
         });
     }
+    crate::metrics::registry().set_journal_pending_count(result.len());
     Ok(result)
 }
 
 pub async fn complete(path: &Path) -> Result<()> {
-    storage::remove_durable(path).await
+    storage::remove_durable(path).await?;
+    let incident_dir = path
+        .parent()
+        .and_then(Path::parent)
+        .map(|root| root.join("incidents"));
+    if let Some(incident_dir) = incident_dir {
+        let count = pending(&incident_dir).await?.len();
+        crate::metrics::registry().set_journal_pending_count(count);
+    }
+    Ok(())
 }
 
 fn journal_directory(incident_dir: &Path) -> PathBuf {

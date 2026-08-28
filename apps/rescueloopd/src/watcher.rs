@@ -8,6 +8,7 @@ use tracing::{error, info, warn};
 use crate::{
     console::load_settings,
     incident_store::{SaveOutcome, recover_pending_observations, save_incident},
+    metrics::{DropReason, EventSource, registry},
     watch_health::{self, WatchHealth},
 };
 
@@ -50,6 +51,7 @@ pub async fn run(directory: &Path, log_health: crate::logging::LogHealth) -> Res
     };
     health.set_last_shutdown_reason(previous_shutdown);
     health.set_log_health(log_health.write_errors(), log_health.export_drops());
+    registry().set_log_write_failures(log_health.write_errors());
     health.publish_to(directory, None).await?;
     let cancellation = CancellationToken::new();
     let mut tasks = JoinSet::new();
@@ -187,6 +189,7 @@ fn spawn_heartbeat(
                 _ = cancellation.cancelled() => return,
                 _ = interval.tick() => {
                     health.set_log_health(log_health.write_errors(), log_health.export_drops());
+                    registry().set_log_write_failures(log_health.write_errors());
                     if let Err(error) = health.publish_to(&incident_dir, None).await {
                         warn!(event = "watch.health_publish_failed", error = %format!("{error:#}"), "Watcher health snapshot could not be published");
                     }
@@ -244,20 +247,32 @@ async fn run_source(
                 retry_delay = Duration::from_secs(2);
                 info!(event = "observation.received", source = source.name(), incident_id = %incident.id, kind = ?incident.kind, "Failure observation received");
                 health.observation_received(&source_name);
+                registry().event_received(EventSource::from_name(&source_name));
                 let permit = tokio::select! {
-                    _ = cancellation.cancelled() => None,
-                    result = sender.reserve() => result.ok(),
+                    _ = cancellation.cancelled() => {
+                        registry().event_dropped(DropReason::Shutdown);
+                        None
+                    },
+                    result = sender.reserve() => match result {
+                        Ok(permit) => Some(permit),
+                        Err(_) => {
+                            registry().event_dropped(DropReason::QueueClosed);
+                            None
+                        }
+                    },
                 };
                 let Some(permit) = permit else {
                     health.dropped(&source_name);
                     break;
                 };
                 health.queued();
+                registry().set_queue_depth(health.snapshot(None).queue_depth);
                 permit.send((source_name.clone(), incident));
             }
             Err(error) => {
                 degraded = true;
                 health.source_degraded(&source_name, retry_delay.as_millis() as u64);
+                registry().source_reconnected();
                 let _ = health.publish_to(&incident_dir, None).await;
                 warn!(event = "source.retrying", source = source.name(), error = %format!("{error:#}"), retry_delay_ms = retry_delay.as_millis(), "Event source failed; reconnecting");
                 tokio::select! {
@@ -285,7 +300,14 @@ async fn persist(
     health: &WatchHealth,
 ) -> Result<()> {
     health.dequeued();
-    let (destination, outcome) = save_incident(directory, &incident).await?;
+    registry().set_queue_depth(health.snapshot(None).queue_depth);
+    let (destination, outcome) = match save_incident(directory, &incident).await {
+        Ok(result) => result,
+        Err(error) => {
+            registry().event_dropped(DropReason::PersistenceFailed);
+            return Err(error);
+        }
+    };
     match outcome {
         SaveOutcome::Duplicate => {
             health.deduplicated(source);
