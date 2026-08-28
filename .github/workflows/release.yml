@@ -100,7 +100,11 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
@@ -111,3 +115,23 @@ jobs:
           files: |
             rescueloop-*
             SHA256SUMS
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Assemble npm package
+        run: |
+          mkdir -p packaging/npm/native npm-macos-arm64 npm-macos-x64
+          tar -C npm-macos-arm64 -xzf rescueloop-macos-aarch64.tar.gz
+          tar -C npm-macos-x64 -xzf rescueloop-macos-x86_64.tar.gz
+          cp npm-macos-arm64/rescueloop packaging/npm/native/rescueloop-darwin-arm64
+          cp npm-macos-x64/rescueloop packaging/npm/native/rescueloop-darwin-x64
+          unzip -p rescueloop-windows-x86_64.zip rescueloop.exe > packaging/npm/native/rescueloop-win32-x64.exe
+          cp LICENSE packaging/npm/LICENSE
+          chmod 755 packaging/npm/bin/rescueloop.js packaging/npm/native/rescueloop-darwin-*
+          node scripts/sync-version.mjs --check "${GITHUB_REF_NAME#v}"
+          npm pack ./packaging/npm --dry-run
+      - name: Publish npm package
+        run: npm publish ./packaging/npm --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
