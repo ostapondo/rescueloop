@@ -53,6 +53,8 @@ struct App {
     agent_name: String,
     show_history: bool,
     show_health: bool,
+    show_timeline: bool,
+    timeline: Vec<crate::timeline::TimelineEvent>,
     health: crate::doctor::DoctorSnapshot,
 }
 
@@ -84,6 +86,8 @@ pub async fn run(
         agent_name,
         show_history: false,
         show_health: false,
+        show_timeline: false,
+        timeline: Vec::new(),
         health: crate::doctor::collect(&dir, log_guard).await,
     };
     let (sender, mut results) =
@@ -250,10 +254,15 @@ pub async fn run(
                                     let _verification_timer = crate::metrics::registry()
                                         .timer(crate::metrics::DurationKind::Verification);
                                     match rescueloop_platform::verify_replay(context).await {
-                                    Ok(replay) if replay.passed => Ok(
-                                        "ALREADY RESOLVED\n\nThe proposed target is already absent and the original action now succeeds. No additional change was needed."
-                                            .to_string(),
-                                    ),
+                                    Ok(replay) if replay.passed => {
+                                        match record_already_resolved_timeline(&incident_dir, &incident).await {
+                                            Ok(()) => Ok(
+                                                "ALREADY RESOLVED\n\nThe proposed target is already absent and the original action now succeeds. No additional change was needed."
+                                                    .to_string(),
+                                            ),
+                                            Err(error) => Err(error.to_string()),
+                                        }
+                                    },
                                     Ok(replay) => Err(format!(
                                         "The proposed target is already absent, but replay still fails with exit code {:?}. Run AI analysis again for the current state.",
                                         replay.exit_code
@@ -292,6 +301,7 @@ pub async fn run(
                         None => None,
                     };
                     app.show_repair = false;
+                    app.show_timeline = false;
                 }
                 (_, KeyCode::Down | KeyCode::Char('j')) => {
                     if app.selected + 1 < app.incidents.len() {
@@ -302,6 +312,7 @@ pub async fn run(
                         None => None,
                     };
                     app.show_repair = false;
+                    app.show_timeline = false;
                 }
                 (_, KeyCode::Enter) => app.show_details = !app.show_details,
                 (_, KeyCode::Char('a')) if app.analysis.is_none() => {
@@ -343,6 +354,15 @@ pub async fn run(
                 }
                 (_, KeyCode::Char('v')) => {
                     app.show_health = !app.show_health;
+                    app.state = UiState::Ready;
+                }
+                (_, KeyCode::Char('t')) => {
+                    app.show_timeline = !app.show_timeline;
+                    app.show_health = false;
+                    app.timeline = match app.incidents.get(app.selected) {
+                        Some((incident, _)) => crate::timeline::load(&dir, incident).await?,
+                        None => Vec::new(),
+                    };
                     app.state = UiState::Ready;
                 }
                 (_, KeyCode::Char('g'))
@@ -410,6 +430,7 @@ pub async fn run(
                 }
                 (_, KeyCode::Esc) => {
                     app.show_health = false;
+                    app.show_timeline = false;
                     app.show_details = false;
                     app.show_repair = false;
                     app.state = UiState::Ready;
@@ -425,6 +446,71 @@ pub async fn run(
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     outcome
+}
+
+async fn record_already_resolved_timeline(
+    dir: &std::path::Path,
+    incident: &Incident,
+) -> Result<()> {
+    use rescueloop_ledger::{TimelineComponent, TimelineOutcome, TimelineTransition};
+
+    let correlation_id = Uuid::new_v4();
+    let events = [
+        (
+            TimelineComponent::Planner,
+            TimelineTransition::PlanProposed,
+            TimelineOutcome::Completed,
+            "Typed repair plan selected for review",
+            None,
+        ),
+        (
+            TimelineComponent::Approval,
+            TimelineTransition::Approved,
+            TimelineOutcome::Completed,
+            "Exact reviewed repair approved locally",
+            None,
+        ),
+        (
+            TimelineComponent::Repair,
+            TimelineTransition::Applied,
+            TimelineOutcome::Refused,
+            "No mutation was needed because the reviewed target was already absent",
+            Some("local state changed before repair execution"),
+        ),
+        (
+            TimelineComponent::Verifier,
+            TimelineTransition::Verified,
+            TimelineOutcome::Completed,
+            "Original failure replay passed without an additional repair",
+            None,
+        ),
+        (
+            TimelineComponent::Ledger,
+            TimelineTransition::Committed,
+            TimelineOutcome::Completed,
+            "Already-resolved incident committed after bounded verification",
+            None,
+        ),
+    ];
+    for (component, transition, outcome, explanation, reason) in events {
+        crate::timeline::record(
+            dir,
+            incident,
+            crate::timeline::EventSpec {
+                correlation_id: Some(correlation_id),
+                component,
+                transition,
+                outcome,
+                explanation,
+                reason,
+                status: IncidentStatus::VerifiedFixed,
+                occurred_at: chrono::Utc::now(),
+            },
+        )
+        .await?;
+    }
+    record_incident_status(dir, incident, IncidentStatus::VerifiedFixed, None).await?;
+    Ok(())
 }
 
 async fn select_agent(
