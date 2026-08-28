@@ -35,6 +35,9 @@ jobs:
       - name: Observation crash recovery E2E
         if: runner.os != 'Windows'
         run: ./scripts/validate-observation-recovery.sh
+      - name: macOS native service lifecycle
+        if: runner.os == 'macOS'
+        run: ./scripts/e2e-macos-service.sh
       - name: MCP protocol compatibility
         if: runner.os != 'Windows'
         run: ./scripts/validate-mcp.sh
