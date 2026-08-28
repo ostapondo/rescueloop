@@ -5,6 +5,7 @@ use rescueloop_core::{AnalysisProvider, AnalysisRequest, Incident};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::{error, info};
+use uuid::Uuid;
 
 mod console;
 mod doctor;
@@ -16,6 +17,7 @@ mod observation_journal;
 mod repair_flow;
 mod service;
 mod storage;
+mod timeline;
 mod tui;
 mod watch_health;
 mod watcher;
@@ -49,6 +51,12 @@ enum Command {
     Status,
     /// Explain the health of RescueLoop, its event sources, and local state.
     Doctor,
+    /// Show the hash-linked lifecycle timeline for one saved incident.
+    Timeline {
+        incident: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// Restart the background watcher.
     Restart,
     /// Stop and remove the background watcher registration.
@@ -209,6 +217,7 @@ async fn run(cli: Cli, log_guard: &logging::LogGuard) -> Result<()> {
         Some(Command::Stop) => service::stop().await,
         Some(Command::Status) => service::status().await,
         Some(Command::Doctor) => doctor::run(&cli.incident_dir, log_guard).await,
+        Some(Command::Timeline { incident, json }) => show_timeline(&incident, json).await,
         Some(Command::Restart) => service::restart().await,
         Some(Command::Uninstall) => service::uninstall().await,
         Some(Command::Mcp) => mcp::serve(&cli.incident_dir).await,
@@ -303,6 +312,7 @@ impl Command {
             Self::Stop => "stop",
             Self::Status => "status",
             Self::Doctor => "doctor",
+            Self::Timeline { .. } => "timeline",
             Self::Restart => "restart",
             Self::Uninstall => "uninstall",
             Self::Mcp => "mcp",
@@ -319,6 +329,38 @@ impl Command {
             Self::Repair { .. } => "repair",
         }
     }
+}
+
+async fn show_timeline(path: &Path, json: bool) -> Result<()> {
+    let incident = incident_store::read_incident_document(path)
+        .await
+        .context("cannot read incident")?;
+    let incident_dir = path.parent().context("incident path has no parent")?;
+    let events = timeline::load(incident_dir, &incident).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&events)?);
+        return Ok(());
+    }
+    println!("Incident {} timeline", incident.id);
+    if events.is_empty() {
+        println!("No timeline events are available for this legacy incident.");
+    }
+    for event in events {
+        println!(
+            "{}  {:?}  {:?}/{:?}  {}  correlation={} ledger={}",
+            event.timestamp.to_rfc3339(),
+            event.component,
+            event.lifecycle_transition,
+            event.outcome,
+            event.explanation,
+            event.correlation_id,
+            event.ledger_entry_id,
+        );
+        if let Some(reason) = event.delay_or_refusal_reason {
+            println!("  reason: {reason}");
+        }
+    }
+    Ok(())
 }
 
 async fn run_supervised(
@@ -415,10 +457,28 @@ pub(crate) async fn analyze_with_provider(
         "Analysis started"
     );
     let incident_id = incident.id;
+    let analysis_correlation_id = Uuid::new_v4();
     let request = AnalysisRequest::bounded(incident, allowed_actions);
     let response = match provider.analyze(&request).await {
         Ok(response) => response,
         Err(error) => {
+            if let Some(incident_dir) = path.parent() {
+                let _ = timeline::record(
+                    incident_dir,
+                    &request.incident,
+                    timeline::EventSpec {
+                        correlation_id: Some(analysis_correlation_id),
+                        component: rescueloop_ledger::TimelineComponent::Analyzer,
+                        transition: rescueloop_ledger::TimelineTransition::Analyzed,
+                        outcome: rescueloop_ledger::TimelineOutcome::Failed,
+                        explanation: "Analysis did not produce a valid bounded response",
+                        reason: Some("provider request or response validation failed"),
+                        status: rescueloop_core::IncidentStatus::Investigating,
+                        occurred_at: chrono::Utc::now(),
+                    },
+                )
+                .await;
+            }
             error!(
                 event = "analysis.failed",
                 incident_id = %incident_id,
@@ -431,6 +491,56 @@ pub(crate) async fn analyze_with_provider(
     };
     if let Some(output) = output {
         fs::write(output, serde_json::to_vec_pretty(&response)?).await?;
+    }
+    if let Some(incident_dir) = path.parent() {
+        timeline::record(
+            incident_dir,
+            &request.incident,
+            timeline::EventSpec {
+                correlation_id: Some(analysis_correlation_id),
+                component: rescueloop_ledger::TimelineComponent::Analyzer,
+                transition: rescueloop_ledger::TimelineTransition::Analyzed,
+                outcome: rescueloop_ledger::TimelineOutcome::Completed,
+                explanation: "Bounded analysis response validated locally",
+                reason: None,
+                status: rescueloop_core::IncidentStatus::Diagnosed,
+                occurred_at: chrono::Utc::now(),
+            },
+        )
+        .await?;
+        timeline::record(
+            incident_dir,
+            &request.incident,
+            timeline::EventSpec {
+                correlation_id: Some(analysis_correlation_id),
+                component: rescueloop_ledger::TimelineComponent::Planner,
+                transition: rescueloop_ledger::TimelineTransition::PlanProposed,
+                outcome: if response.proposed_actions.is_empty() {
+                    rescueloop_ledger::TimelineOutcome::Refused
+                } else {
+                    rescueloop_ledger::TimelineOutcome::Completed
+                },
+                explanation: if response.proposed_actions.is_empty() {
+                    "Analysis produced no safe typed repair plan"
+                } else {
+                    "Typed repair plan proposed for explicit review"
+                },
+                reason: response.proposed_actions.is_empty().then_some(
+                    if response.needs_more_evidence {
+                        "more bounded evidence is required"
+                    } else {
+                        "no supported safe action was proposed"
+                    },
+                ),
+                status: if response.proposed_actions.is_empty() {
+                    rescueloop_core::IncidentStatus::Diagnosed
+                } else {
+                    rescueloop_core::IncidentStatus::RepairProposed
+                },
+                occurred_at: chrono::Utc::now(),
+            },
+        )
+        .await?;
     }
     info!(
         event = "analysis.completed",
@@ -468,5 +578,18 @@ mod cli_tests {
                 Cli::try_parse_from(["rescueloop", name]).expect("lifecycle command should parse");
             assert_eq!(cli.command.as_ref().map(Command::name), Some(expected));
         }
+    }
+
+    #[test]
+    fn parses_timeline_with_bounded_json_output() {
+        let cli = Cli::try_parse_from(["rescueloop", "timeline", "incident.json", "--json"])
+            .expect("timeline command should parse");
+        assert!(matches!(
+            cli.command,
+            Some(Command::Timeline {
+                incident,
+                json: true
+            }) if incident == std::path::PathBuf::from("incident.json")
+        ));
     }
 }
