@@ -81,7 +81,11 @@ try {
         throw "watcher did not reach $ExpectedWatcherState health: $HealthText"
     }
 
-    & $Binary --incident-dir $Incidents service install
+    $PackageV1 = Join-Path $Root "node_modules/rescueloop/native"
+    New-Item -ItemType Directory -Force -Path $PackageV1 | Out-Null
+    $PackageBinary = Join-Path $PackageV1 "rescueloop-win32-x64.exe"
+    Copy-Item $Binary $PackageBinary
+    & $PackageBinary --incident-dir $Incidents service install
     if ($LASTEXITCODE -ne 0) { throw "scheduled task installation failed" }
     $ServiceInstalled = $true
     $InitialHealth = Assert-Health "healthy"
@@ -91,6 +95,12 @@ try {
     if (-not ($Task.Triggers | Where-Object { $_.CimClass.CimClassName -eq "MSFT_TaskLogonTrigger" })) {
         throw "scheduled task has no logon trigger"
     }
+    $StableBinary = Join-Path $env:LOCALAPPDATA "RescueLoop/bin/rescueloop.exe"
+    if ($Task.Actions[0].Execute -ne $StableBinary) { throw "scheduled task points into a replaceable package directory" }
+    Remove-Item -Recurse -Force (Join-Path $Root "node_modules")
+    & $StableBinary restart
+    if ($LASTEXITCODE -ne 0) { throw "watcher could not restart after package replacement" }
+    $null = Assert-Health "healthy"
 
     & schtasks /End /TN RescueLoop | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "schtasks /End failed" }
