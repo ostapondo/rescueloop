@@ -67,7 +67,7 @@ pub async fn install_to_path() -> Result<PathBuf> {
             .context("stable install path has no parent")?;
         fs::create_dir_all(&bin).await?;
         if source != destination {
-            fs::copy(&source, &destination).await?;
+            copy_executable(&source, &destination).await?;
         }
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o755)).await?;
@@ -82,7 +82,7 @@ pub async fn install_to_path() -> Result<PathBuf> {
             .context("stable install path has no parent")?;
         fs::create_dir_all(&bin).await?;
         if source != destination {
-            fs::copy(&source, &destination).await?;
+            copy_executable(&source, &destination).await?;
         }
         let current = std::env::var("PATH").unwrap_or_default();
         if !std::env::split_paths(&current).any(|path| path == bin) {
@@ -103,6 +103,30 @@ pub async fn install_to_path() -> Result<PathBuf> {
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     bail!("PATH installation currently supports macOS and Windows")
+}
+
+async fn copy_executable(source: &Path, destination: &Path) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match fs::copy(source, destination).await {
+                Ok(_) => return Ok(()),
+                Err(error)
+                    if error.raw_os_error() == Some(32)
+                        && tokio::time::Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        fs::copy(source, destination).await?;
+        Ok(())
+    }
 }
 
 fn stable_install_path() -> Result<PathBuf> {
