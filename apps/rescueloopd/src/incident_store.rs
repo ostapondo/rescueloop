@@ -112,7 +112,10 @@ async fn incident_json_paths(dir: &Path) -> Result<Vec<PathBuf>> {
 
 pub(crate) async fn incident_index(dir: &Path) -> Result<rescueloop_index::IncidentIndex> {
     let state_root = dir.parent().unwrap_or(dir);
-    rescueloop_index::IncidentIndex::open(state_root, dir).await
+    rescueloop_index::IncidentIndex::open_with_rebuild_observer(state_root, dir, || {
+        crate::metrics::registry().index_rebuilt();
+    })
+    .await
 }
 
 pub(crate) async fn print_incidents(dir: &Path) -> Result<()> {
@@ -170,6 +173,8 @@ pub(crate) async fn save_incident(
     dir: &Path,
     incident: &Incident,
 ) -> Result<(PathBuf, SaveOutcome)> {
+    let _persist_timer =
+        crate::metrics::registry().timer(crate::metrics::DurationKind::IncidentPersist);
     fs::create_dir_all(dir).await?;
     let _store_lock = acquire_store_lock(dir).await?;
     recover_pending_locked(dir).await?;
@@ -202,6 +207,7 @@ pub(crate) async fn recover_pending_observations(dir: &Path) -> Result<usize> {
 async fn recover_pending_locked(dir: &Path) -> Result<usize> {
     let pending = observation_journal::pending(dir).await?;
     let count = pending.len();
+    crate::metrics::registry().set_journal_pending_count(count);
     for transaction in pending {
         apply_observation(dir, &transaction.incident).await?;
         observation_journal::complete(&transaction.path).await?;
@@ -359,6 +365,8 @@ struct GroupingCandidates {
 }
 
 async fn grouping_candidates(dir: &Path, group_key: &str) -> Result<GroupingCandidates> {
+    let _grouping_timer =
+        crate::metrics::registry().timer(crate::metrics::DurationKind::IncidentGrouping);
     let index = incident_index(dir).await.ok();
     if let Some(index) = &index
         && let Ok(paths) = index.paths_for_group_or_legacy(group_key).await

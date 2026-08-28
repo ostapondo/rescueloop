@@ -2,7 +2,12 @@ use anyhow::Result;
 use chrono::Utc;
 use std::{path::Path, time::Duration};
 
-use crate::{incident_store, logging::LogGuard, observation_journal, service, watch_health};
+use crate::{
+    incident_store,
+    logging::LogGuard,
+    metrics::{DurationSnapshot, MetricsSnapshot},
+    observation_journal, service, watch_health,
+};
 
 const STALE_WATCH_HEALTH: Duration = Duration::from_secs(150);
 
@@ -44,6 +49,7 @@ pub struct DoctorSnapshot {
     pub queue_depth: usize,
     pub queue_capacity: usize,
     pub journal_pending: usize,
+    pub metrics: MetricsSnapshot,
 }
 
 pub async fn collect(incident_dir: &Path, logs: &LogGuard) -> DoctorSnapshot {
@@ -187,6 +193,10 @@ pub async fn collect(incident_dir: &Path, logs: &LogGuard) -> DoctorSnapshot {
         queue_depth: watcher.as_ref().map_or(0, |value| value.queue_depth),
         queue_capacity: watcher.as_ref().map_or(0, |value| value.queue_capacity),
         journal_pending,
+        metrics: watcher.as_ref().map_or_else(
+            || crate::metrics::registry().snapshot(),
+            |value| value.metrics.clone(),
+        ),
     }
 }
 
@@ -271,7 +281,47 @@ pub async fn run(incident_dir: &Path, logs: &LogGuard) -> Result<()> {
             .as_deref()
             .unwrap_or("none recorded")
     );
+    println!("\nLOCAL METRICS (no exporter enabled)");
+    println!(
+        "events_received_total={} events_dropped_total={}",
+        serde_json::to_string(&snapshot.metrics.events_received_total)?,
+        serde_json::to_string(&snapshot.metrics.events_dropped_total)?
+    );
+    println!(
+        "source_reconnects_total={} queue_depth={} rollback_total={} log_write_failures_total={} index_rebuild_total={} journal_pending_count={}",
+        snapshot.metrics.source_reconnects_total,
+        snapshot.metrics.queue_depth,
+        snapshot.metrics.rollback_total,
+        snapshot.metrics.log_write_failures_total,
+        snapshot.metrics.index_rebuild_total,
+        snapshot.metrics.journal_pending_count,
+    );
+    for (name, duration) in [
+        (
+            "incident_persist_duration",
+            &snapshot.metrics.incident_persist_duration,
+        ),
+        (
+            "incident_grouping_duration",
+            &snapshot.metrics.incident_grouping_duration,
+        ),
+        ("analysis_duration", &snapshot.metrics.analysis_duration),
+        ("repair_duration", &snapshot.metrics.repair_duration),
+        (
+            "verification_duration",
+            &snapshot.metrics.verification_duration,
+        ),
+    ] {
+        print_duration(name, duration);
+    }
     Ok(())
+}
+
+fn print_duration(name: &str, duration: &DurationSnapshot) {
+    println!(
+        "{name}: count={} total={}us max={}us last={}us",
+        duration.count, duration.total_micros, duration.max_micros, duration.last_micros
+    );
 }
 
 #[cfg(test)]
@@ -307,6 +357,7 @@ mod tests {
             queue_capacity: 8,
             log_write_errors: 0,
             log_export_drops: 0,
+            metrics: crate::metrics::MetricsSnapshot::default(),
         }
     }
 

@@ -82,6 +82,9 @@ async fn repair_impl(
             report!("No changes made. Approve this exact operational target to execute.");
             return Ok(());
         }
+        let _repair_timer = crate::metrics::registry().timer(crate::metrics::DurationKind::Repair);
+        let _verification_timer =
+            crate::metrics::registry().timer(crate::metrics::DurationKind::Verification);
         let target_id = match &action {
             rescueloop_repair::OperationalAction::RestartContainer { container_id, .. } => {
                 container_id.clone()
@@ -107,6 +110,9 @@ async fn repair_impl(
         )
         .await?;
         let receipt = rescueloop_repair::execute_operational(action, &target_id).await?;
+        if receipt.rolled_back {
+            crate::metrics::registry().rollback();
+        }
         tracing::info!(
             event = "repair.executed",
             incident_id = %incident.id,
@@ -186,7 +192,10 @@ async fn repair_impl(
         .launch_context
         .clone()
         .context("verified repair requires an exact recorded launch context")?;
-    rescueloop_repair::apply(&mut transaction).await?;
+    {
+        let _repair_timer = crate::metrics::registry().timer(crate::metrics::DurationKind::Repair);
+        rescueloop_repair::apply(&mut transaction).await?;
+    }
     tracing::info!(
         event = "repair.applied",
         incident_id = %incident.id,
@@ -214,7 +223,11 @@ async fn repair_impl(
         None,
     )
     .await?;
-    let replay = rescueloop_platform::verify_replay(&launch_context).await;
+    let replay = {
+        let _verification_timer =
+            crate::metrics::registry().timer(crate::metrics::DurationKind::Verification);
+        rescueloop_platform::verify_replay(&launch_context).await
+    };
     match replay {
         Ok(result) if result.passed => {
             rescueloop_repair::finalize(&mut transaction, true).await?;
@@ -253,6 +266,7 @@ async fn repair_impl(
                         "CRITICAL: verification failed ({replay_message}) and automatic rollback also failed"
                     )
                 })?;
+            crate::metrics::registry().rollback();
             let receipt = rescueloop_repair::persist(&transaction, &transaction_root).await?;
             report!(
                 "ROLLED BACK: verification failed ({replay_message}); original state restored."

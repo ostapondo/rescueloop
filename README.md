@@ -132,6 +132,27 @@ lineage ledger remain the durable sources of truth.
 
 No network listener, Prometheus endpoint, or telemetry export is enabled by this feature.
 
+## Local metrics
+
+RescueLoop keeps a typed, process-local metrics registry and includes the watcher's latest bounded
+snapshot in `watch-health-v1.json`. `rescueloop doctor` and the TUI self-health view show these
+values locally:
+
+- `events_received_total{source}` and `events_dropped_total{reason}` use closed, bounded label sets;
+- `source_reconnects_total`, `queue_depth`, `rollback_total`, `log_write_failures_total`,
+  `index_rebuild_total`, and `journal_pending_count` are saturating counters or gauges;
+- `incident_persist_duration`, `incident_grouping_duration`, `analysis_duration`,
+  `repair_duration`, and `verification_duration` retain only count, total, maximum, and latest
+  duration in microseconds. They do not retain incident IDs, paths, evidence, or arguments.
+
+`index_rebuild_total` includes explicit rebuilds plus successful automatic recovery when the
+projection is missing, stale, or corrupt. Failed rebuild attempts are not reported as successes.
+
+Metrics reset with the process and are operational hints rather than durable audit history. Incident
+JSON and the lineage ledger remain authoritative. Metric export is disabled: there is no metrics
+socket, Prometheus endpoint, OTLP metrics client, background network task, or implicit environment
+discovery. Any future exporter must be explicit opt-in, bounded, and redacted.
+
 Use `a` to analyze an incident, `r` to review a repair, and `y` to approve it.
 
 Arguments may contain secrets, so RescueLoop records them only when `--record-args` is present. They
