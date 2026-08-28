@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use rescueloop_core::Incident;
-use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
 use std::{
     fmt,
     io::Read,
@@ -11,6 +11,38 @@ use std::{
 const INDEX_SCHEMA: u32 = 1;
 const INDEX_FILENAME: &str = "index-v1.db";
 const MAX_INCIDENT_DOCUMENT_BYTES: u64 = 4 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReadOnlyHealth {
+    pub count: u64,
+    pub schema_version: u32,
+    pub integrity_ok: bool,
+}
+
+/// Inspects an existing projection without creating, rebuilding, quarantining, or writing it.
+pub async fn inspect_read_only(state_root: &Path) -> Result<ReadOnlyHealth> {
+    let path = state_root.join(INDEX_FILENAME);
+    tokio::task::spawn_blocking(move || {
+        let connection = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| {
+                format!(
+                    "cannot inspect disposable incident index: {}",
+                    path.display()
+                )
+            })?;
+        connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        let integrity: String = connection.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+        let schema_version: u32 =
+            connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        let count = connection.query_row("SELECT COUNT(*) FROM incidents", [], |row| row.get(0))?;
+        Ok(ReadOnlyHealth {
+            count,
+            schema_version,
+            integrity_ok: integrity == "ok" && schema_version == INDEX_SCHEMA,
+        })
+    })
+    .await?
+}
 
 #[derive(Clone)]
 pub struct IncidentIndex {
@@ -398,6 +430,21 @@ mod tests {
         let index = IncidentIndex::open(temp.path(), &incidents).await.unwrap();
         assert_eq!(index.paths_newest_first().await.unwrap(), vec![path]);
         assert!(index.path().ends_with("index-v1.db"));
+    }
+
+    #[tokio::test]
+    async fn read_only_health_never_creates_a_missing_projection() {
+        let temp = tempfile::tempdir().unwrap();
+        assert!(inspect_read_only(temp.path()).await.is_err());
+        assert!(!temp.path().join(INDEX_FILENAME).exists());
+
+        let incidents = temp.path().join("incidents");
+        write_incident(&incidents, &incident("fixture"));
+        IncidentIndex::open(temp.path(), &incidents).await.unwrap();
+        let health = inspect_read_only(temp.path()).await.unwrap();
+        assert!(health.integrity_ok);
+        assert_eq!(health.schema_version, INDEX_SCHEMA);
+        assert_eq!(health.count, 1);
     }
 
     #[tokio::test]
