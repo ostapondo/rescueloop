@@ -27,6 +27,10 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "MCP tool discovery failed" }
     & npx.cmd @Inspector --method tools/call --tool-name list_incidents --tool-arg limit=5 | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "MCP list_incidents call failed" }
+    foreach ($Tool in @("get_agent_health", "list_event_sources", "get_local_metrics_summary")) {
+        & npx.cmd @Inspector --method tools/call --tool-name $Tool | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "MCP $Tool call failed" }
+    }
 
     Write-Host "Windows MCP Inspector validation passed."
 }

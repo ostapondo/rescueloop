@@ -24,6 +24,7 @@ const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 #[derive(Debug, Clone)]
 struct RescueLoopMcp {
     incident_dir: PathBuf,
+    log_health: Option<crate::logging::LogHealth>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -34,6 +35,10 @@ struct ListIncidentsInput {
     #[serde(default = "default_limit")]
     limit: u32,
 }
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct EmptyInput {}
 
 #[derive(Debug, Serialize, JsonSchema)]
 struct ListIncidentsOutput {
@@ -138,6 +143,136 @@ struct EvidenceAssessment {
     retained_evidence: usize,
 }
 
+#[derive(Debug, Serialize, JsonSchema)]
+struct GetAgentHealthOutput {
+    #[schemars(transform = remove_format)]
+    schema_version: u16,
+    version: String,
+    platform: PlatformOutput,
+    overall_status: String,
+    watcher_uptime: UptimeOutput,
+    last_shutdown: LastShutdownOutput,
+    components: Vec<HealthCheckOutput>,
+    slo_assertions: Vec<SloAssertionOutput>,
+    pipeline: PipelineOutput,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct UptimeOutput {
+    available: bool,
+    #[schemars(transform = remove_format)]
+    seconds: u64,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct LastShutdownOutput {
+    available: bool,
+    reason: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct PlatformOutput {
+    os: String,
+    architecture: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct HealthCheckOutput {
+    name: String,
+    status: String,
+    detail: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct SloAssertionOutput {
+    assertion: String,
+    status: String,
+    detail: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct PipelineOutput {
+    #[schemars(transform = remove_format)]
+    received: u64,
+    #[schemars(transform = remove_format)]
+    persisted: u64,
+    #[schemars(transform = remove_format)]
+    grouped: u64,
+    #[schemars(transform = remove_format)]
+    deduplicated: u64,
+    #[schemars(transform = remove_format)]
+    queue_depth: usize,
+    #[schemars(transform = remove_format)]
+    queue_capacity: usize,
+    #[schemars(transform = remove_format)]
+    journal_pending: usize,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct ListEventSourcesOutput {
+    #[schemars(transform = remove_format)]
+    schema_version: u16,
+    sources: Vec<EventSourceOutput>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct EventSourceOutput {
+    name: String,
+    status: String,
+    last_success: LastSuccessOutput,
+    #[schemars(transform = remove_format)]
+    received: u64,
+    #[schemars(transform = remove_format)]
+    dropped: u64,
+    #[schemars(transform = remove_format)]
+    deduplicated: u64,
+    #[schemars(transform = remove_format)]
+    reconnect_count: u64,
+    #[schemars(transform = remove_format)]
+    backoff_ms: u64,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct LastSuccessOutput {
+    available: bool,
+    timestamp: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct GetLocalMetricsSummaryOutput {
+    #[schemars(transform = remove_format)]
+    schema_version: u16,
+    #[schemars(transform = remove_formats_recursive)]
+    events_received_total: BTreeMap<String, u64>,
+    #[schemars(transform = remove_formats_recursive)]
+    events_dropped_total: BTreeMap<String, u64>,
+    #[schemars(transform = remove_format)]
+    source_reconnects_total: u64,
+    #[schemars(transform = remove_format)]
+    queue_depth: u64,
+    durations: BTreeMap<String, DurationSummaryOutput>,
+    #[schemars(transform = remove_format)]
+    rollback_total: u64,
+    #[schemars(transform = remove_format)]
+    log_write_failures_total: u64,
+    #[schemars(transform = remove_format)]
+    index_rebuild_total: u64,
+    #[schemars(transform = remove_format)]
+    journal_pending_count: u64,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+struct DurationSummaryOutput {
+    #[schemars(transform = remove_format)]
+    count: u64,
+    #[schemars(transform = remove_format)]
+    total_micros: u64,
+    #[schemars(transform = remove_format)]
+    max_micros: u64,
+    #[schemars(transform = remove_format)]
+    last_micros: u64,
+}
+
 fn default_limit() -> u32 {
     20
 }
@@ -146,7 +281,35 @@ fn remove_format(schema: &mut Schema) {
     schema.remove("format");
 }
 
-pub async fn serve(incident_dir: &Path) -> anyhow::Result<()> {
+fn remove_formats_recursive(schema: &mut Schema) {
+    fn visit(value: &mut Value) {
+        match value {
+            Value::Object(object) => {
+                object.remove("format");
+                for child in object.values_mut() {
+                    visit(child);
+                }
+            }
+            Value::Array(array) => {
+                for child in array {
+                    visit(child);
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(object) = schema.as_object_mut() {
+        object.remove("format");
+        for value in object.values_mut() {
+            visit(value);
+        }
+    }
+}
+
+pub async fn serve(
+    incident_dir: &Path,
+    log_health: crate::logging::LogHealth,
+) -> anyhow::Result<()> {
     let incident_dir = storage::prepare_mcp_store(incident_dir)?;
     let reader = FramedRead::new(
         tokio::io::stdin(),
@@ -165,9 +328,12 @@ pub async fn serve(incident_dir: &Path) -> anyhow::Result<()> {
         tokio::io::stdout(),
         JsonRpcMessageCodec::<rmcp::service::TxJsonRpcMessage<rmcp::RoleServer>>::default(),
     );
-    let service = RescueLoopMcp { incident_dir }
-        .serve((writer, reader))
-        .await?;
+    let service = RescueLoopMcp {
+        incident_dir,
+        log_health: Some(log_health),
+    }
+    .serve((writer, reader))
+    .await?;
     service.waiting().await?;
     Ok(())
 }
@@ -295,6 +461,167 @@ impl RescueLoopMcp {
         }))
     }
 
+    #[tool(
+        description = "Get bounded local RescueLoop component health and SLO assertions. This tool cannot change agent state.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn get_agent_health(
+        &self,
+        Parameters(_input): Parameters<EmptyInput>,
+    ) -> Result<Json<GetAgentHealthOutput>, CallToolResult> {
+        let snapshot = self.health_snapshot().await;
+        let overall_status = overall_health(&snapshot);
+        let watcher_uptime = UptimeOutput {
+            available: snapshot.watcher_uptime_seconds.is_some(),
+            seconds: snapshot.watcher_uptime_seconds.unwrap_or_default(),
+        };
+        let last_shutdown = LastShutdownOutput {
+            available: snapshot.last_shutdown_reason.is_some(),
+            reason: snapshot.last_shutdown_reason.clone().unwrap_or_default(),
+        };
+        Ok(Json(GetAgentHealthOutput {
+            schema_version: 1,
+            version: snapshot.version,
+            platform: PlatformOutput {
+                os: std::env::consts::OS.into(),
+                architecture: std::env::consts::ARCH.into(),
+            },
+            overall_status,
+            watcher_uptime,
+            last_shutdown,
+            components: snapshot
+                .checks
+                .into_iter()
+                .map(|check| HealthCheckOutput {
+                    name: check.name,
+                    status: health_state(check.state),
+                    detail: check.detail,
+                })
+                .collect(),
+            slo_assertions: snapshot
+                .slo_assertions
+                .into_iter()
+                .map(|assertion| SloAssertionOutput {
+                    assertion: assertion.kind.label().replace(' ', "_"),
+                    status: assertion.status.label().to_ascii_lowercase(),
+                    detail: assertion.detail,
+                })
+                .collect(),
+            pipeline: PipelineOutput {
+                received: snapshot.received,
+                persisted: snapshot.persisted,
+                grouped: snapshot.grouped,
+                deduplicated: snapshot.deduplicated,
+                queue_depth: snapshot.queue_depth,
+                queue_capacity: snapshot.queue_capacity,
+                journal_pending: snapshot.journal_pending,
+            },
+        }))
+    }
+
+    #[tool(
+        description = "List bounded local event-source health and counters. This tool cannot enable, disable, or reconnect sources.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn list_event_sources(
+        &self,
+        Parameters(_input): Parameters<EmptyInput>,
+    ) -> Result<Json<ListEventSourcesOutput>, CallToolResult> {
+        let snapshot = self.health_snapshot().await;
+        Ok(Json(ListEventSourcesOutput {
+            schema_version: 1,
+            sources: snapshot
+                .sources
+                .into_iter()
+                .map(|source| {
+                    let last_success = LastSuccessOutput {
+                        available: source.last_success_at.is_some(),
+                        timestamp: source
+                            .last_success_at
+                            .map(|value| value.to_rfc3339())
+                            .unwrap_or_default(),
+                    };
+                    EventSourceOutput {
+                        name: source.name,
+                        status: camel_to_snake(&format!("{:?}", source.state)),
+                        last_success,
+                        received: source.received,
+                        dropped: source.dropped,
+                        deduplicated: source.deduplicated,
+                        reconnect_count: source.reconnect_count,
+                        backoff_ms: source.backoff_ms,
+                    }
+                })
+                .collect(),
+        }))
+    }
+
+    #[tool(
+        description = "Get a bounded summary of typed process-local RescueLoop metrics. No exporter is enabled by this tool.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn get_local_metrics_summary(
+        &self,
+        Parameters(_input): Parameters<EmptyInput>,
+    ) -> Result<Json<GetLocalMetricsSummaryOutput>, CallToolResult> {
+        let metrics = self.health_snapshot().await.metrics;
+        let durations = [
+            (
+                "incident_persist_duration",
+                metrics.incident_persist_duration,
+            ),
+            (
+                "incident_grouping_duration",
+                metrics.incident_grouping_duration,
+            ),
+            ("analysis_duration", metrics.analysis_duration),
+            ("repair_duration", metrics.repair_duration),
+            ("verification_duration", metrics.verification_duration),
+        ]
+        .into_iter()
+        .map(|(name, duration)| (name.into(), duration_summary(duration)))
+        .collect();
+        Ok(Json(GetLocalMetricsSummaryOutput {
+            schema_version: 1,
+            events_received_total: metrics
+                .events_received_total
+                .into_iter()
+                .map(|(source, count)| (camel_to_snake(&format!("{source:?}")), count))
+                .collect(),
+            events_dropped_total: metrics
+                .events_dropped_total
+                .into_iter()
+                .map(|(reason, count)| (camel_to_snake(&format!("{reason:?}")), count))
+                .collect(),
+            source_reconnects_total: metrics.source_reconnects_total,
+            queue_depth: metrics.queue_depth,
+            durations,
+            rollback_total: metrics.rollback_total,
+            log_write_failures_total: metrics.log_write_failures_total,
+            index_rebuild_total: metrics.index_rebuild_total,
+            journal_pending_count: metrics.journal_pending_count,
+        }))
+    }
+
+    async fn health_snapshot(&self) -> crate::doctor::DoctorSnapshot {
+        let (write_errors, export_drops) = self.log_health.as_ref().map_or((0, 0), |health| {
+            (health.write_errors(), health.export_drops())
+        });
+        crate::doctor::collect_read_only(&self.incident_dir, write_errors, export_drops).await
+    }
+
     async fn read_incidents(
         &self,
     ) -> Result<Vec<(rescueloop_core::Incident, PathBuf)>, CallToolResult> {
@@ -395,7 +722,7 @@ impl rmcp::ServerHandler for RescueLoopMcp {
                 env!("CARGO_PKG_VERSION"),
             ))
             .with_instructions(
-                "Read-only access to locally stored, redacted RescueLoop incidents. No repair, replay, arbitrary file, or shell tools are exposed.",
+                "Read-only access to bounded, redacted RescueLoop incidents, lifecycle timelines, agent health, event-source status, and local metrics summaries. No repair, replay, rollback, approval, arbitrary file, path, or shell tools are exposed.",
             );
         info.capabilities = rmcp::model::ServerCapabilities::builder()
             .enable_tools()
@@ -406,6 +733,39 @@ impl rmcp::ServerHandler for RescueLoopMcp {
 
 fn tool_error(message: &str) -> CallToolResult {
     CallToolResult::error(vec![rmcp::model::ContentBlock::text(message.to_owned())])
+}
+
+fn overall_health(snapshot: &crate::doctor::DoctorSnapshot) -> String {
+    if snapshot.checks.iter().any(|check| {
+        check.name == "watcher" && check.state == crate::doctor::HealthState::Disconnected
+    }) {
+        "disconnected".into()
+    } else if snapshot
+        .checks
+        .iter()
+        .any(|check| check.state != crate::doctor::HealthState::Healthy)
+        || snapshot
+            .slo_assertions
+            .iter()
+            .any(|assertion| assertion.status != crate::slo::AssertionStatus::Pass)
+    {
+        "degraded".into()
+    } else {
+        "healthy".into()
+    }
+}
+
+fn health_state(state: crate::doctor::HealthState) -> String {
+    camel_to_snake(&format!("{state:?}"))
+}
+
+fn duration_summary(duration: crate::metrics::DurationSnapshot) -> DurationSummaryOutput {
+    DurationSummaryOutput {
+        count: duration.count,
+        total_micros: duration.total_micros,
+        max_micros: duration.max_micros,
+        last_micros: duration.last_micros,
+    }
 }
 
 fn camel_to_snake(value: &str) -> String {
@@ -433,13 +793,16 @@ mod tests {
     ) -> anyhow::Result<rmcp::service::RunningService<rmcp::RoleClient, ()>> {
         let (client_transport, server_transport) = duplex(64 * 1024);
         tokio::spawn(async move {
-            RescueLoopMcp { incident_dir }
-                .serve(server_transport)
-                .await
-                .unwrap()
-                .waiting()
-                .await
-                .unwrap();
+            RescueLoopMcp {
+                incident_dir,
+                log_health: None,
+            }
+            .serve(server_transport)
+            .await
+            .unwrap()
+            .waiting()
+            .await
+            .unwrap();
         });
         Ok(().serve(client_transport).await?)
     }
@@ -447,7 +810,21 @@ mod tests {
     #[test]
     fn exposes_only_read_only_tools() {
         let tools = RescueLoopMcp::tool_router().list_all();
-        assert_eq!(tools.len(), 3);
+        assert_eq!(tools.len(), 6);
+        assert_eq!(
+            tools
+                .iter()
+                .map(|tool| tool.name.as_ref())
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([
+                "get_agent_health",
+                "get_incident",
+                "get_incident_timeline",
+                "get_local_metrics_summary",
+                "list_event_sources",
+                "list_incidents",
+            ])
+        );
         assert!(tools.iter().all(|tool| tool.output_schema.is_some()));
         assert!(tools.iter().all(|tool| {
             tool.annotations
@@ -456,8 +833,28 @@ mod tests {
                 == Some(true)
         }));
         assert!(!tools.iter().any(|tool| tool.name.contains("repair")));
+        assert!(!tools.iter().any(|tool| {
+            ["replay", "rollback", "approve", "apply", "write", "path"]
+                .iter()
+                .any(|forbidden| tool.name.contains(forbidden))
+        }));
+        assert!(tools.iter().all(|tool| {
+            let schema = serde_json::to_value(&tool.input_schema).unwrap();
+            !schema_property_names(&schema)
+                .iter()
+                .any(|name| name.to_ascii_lowercase().contains("path"))
+        }));
+        for expected in [
+            "get_agent_health",
+            "list_event_sources",
+            "get_incident_timeline",
+            "get_local_metrics_summary",
+        ] {
+            assert!(tools.iter().any(|tool| tool.name == expected));
+        }
         let info = <RescueLoopMcp as rmcp::ServerHandler>::get_info(&RescueLoopMcp {
             incident_dir: PathBuf::from("unused"),
+            log_health: None,
         });
         assert!(info.capabilities.tools.is_some());
         assert!(info.capabilities.resources.is_none());
@@ -528,6 +925,19 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(missing_timeline.is_error, Some(true));
+        for tool in [
+            "get_agent_health",
+            "list_event_sources",
+            "get_local_metrics_summary",
+        ] {
+            let invalid = client
+                .call_tool(CallToolRequestParams::new(tool).with_arguments(
+                    serde_json::Map::from_iter([("unexpected".into(), Value::Bool(true))]),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(invalid.is_error, Some(true));
+        }
         client.cancel().await.unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -565,6 +975,11 @@ mod tests {
         crate::timeline::ensure_initial(&incident_dir, &incident)
             .await
             .unwrap();
+        let watch_health = crate::watch_health::WatchHealth::new(8);
+        watch_health.source_started("fixture-source");
+        watch_health.observation_received("fixture-source");
+        watch_health.queued();
+        watch_health.publish_to(&incident_dir, None).await.unwrap();
         let client = connected_server(incident_dir).await.unwrap();
         let listed = client
             .call_tool(CallToolRequestParams::new("list_incidents"))
@@ -621,6 +1036,38 @@ mod tests {
         assert!(timeline_serialized.contains(&incident.occurrence_id().to_string()));
         assert!(!timeline_serialized.contains("/Users/alice"));
         assert!(!timeline_serialized.contains("secret"));
+        let health = client
+            .call_tool(CallToolRequestParams::new("get_agent_health"))
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(health["schema_version"], 1);
+        assert!(health["components"].is_array());
+        assert!(health["slo_assertions"].is_array());
+        assert!(health["pipeline"].is_object());
+        let sources = client
+            .call_tool(CallToolRequestParams::new("list_event_sources"))
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(sources["sources"][0]["name"], "fixture-source");
+        assert_eq!(sources["sources"][0]["received"], 1);
+        let metrics = client
+            .call_tool(CallToolRequestParams::new("get_local_metrics_summary"))
+            .await
+            .unwrap()
+            .structured_content
+            .unwrap();
+        assert_eq!(metrics["schema_version"], 1);
+        assert!(metrics["durations"]["analysis_duration"].is_object());
+        for output in [&health, &sources, &metrics] {
+            let serialized = serde_json::to_string(output).unwrap();
+            assert!(!serialized.contains("/Users/alice"));
+            assert!(!serialized.contains("--token=secret"));
+            assert!(!serialized.contains("private.crash"));
+        }
         assert!(
             !state_root.join("index-v1.db").exists(),
             "read-only MCP calls must not create the disposable index"
@@ -631,5 +1078,22 @@ mod tests {
 
     fn test_root() -> PathBuf {
         std::env::temp_dir().join(format!("rescueloop-mcp-test-{}", Uuid::new_v4()))
+    }
+
+    fn schema_property_names(value: &Value) -> Vec<String> {
+        let mut names = Vec::new();
+        if let Some(object) = value.as_object() {
+            if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+                names.extend(properties.keys().cloned());
+            }
+            for child in object.values() {
+                names.extend(schema_property_names(child));
+            }
+        } else if let Some(array) = value.as_array() {
+            for child in array {
+                names.extend(schema_property_names(child));
+            }
+        }
+        names
     }
 }
