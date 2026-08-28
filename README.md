@@ -92,6 +92,7 @@ The main commands, close to the actual CLI output:
 | `rescueloop stop` | Stop the watcher but keep its background registration |
 | `rescueloop status` | Show whether the watcher is installed and running |
 | `rescueloop doctor` | Explain watcher, event-source, queue, journal, storage, index, ledger, and log-writer health |
+| `rescueloop diagnostics export` | Preview a bounded, redacted local support bundle; add `--confirm` to write it |
 | `rescueloop timeline <incident.json> [--json]` | Show the bounded, hash-linked lifecycle timeline for one incident |
 | `rescueloop restart` | Restart the registered watcher |
 | `rescueloop uninstall` | Stop the watcher and remove its background registration |
@@ -170,6 +171,25 @@ sentinels and never read incident evidence or user secrets.
 The assertions remain local and add no telemetry, network listener, or MCP tool. They expose
 privileged implementation health in the CLI/TUI only; the existing read-only MCP incident surface
 is unchanged.
+
+## Diagnostic bundles
+
+`rescueloop diagnostics export` first prints an exact preview of the fixed archive members, their
+sizes, the number of included recent log records, the enforced bounds, and excluded private data.
+Preview mode never writes a file. After review, repeat with `--confirm`; optionally select a new
+destination with `--output <file.tar.gz>`. Existing files are never overwritten.
+
+The gzip-compressed tar archive contains version/platform metadata, the bounded doctor health
+snapshot, typed local metrics, event-source status, JSON/index/ledger integrity results, local SLO
+assertions, allowlisted configuration, and up to 200 recent structured log records. Log input,
+individual members, rendered logs, and the final archive all have explicit size bounds. Logs pass
+through a second support-export redaction step.
+
+Incident evidence, filesystem paths, launch arguments, tokens, secrets, model payloads, repair
+contents, and configuration values that identify local resources are excluded. Configuration only
+reports enabled source names and whether optional provider or OTLP features are configured; it does
+not include endpoints or credentials. Bundles remain local and are never uploaded automatically.
+The feature adds no MCP tool because support export is a privileged local filesystem operation.
 
 ## Local metrics
 
