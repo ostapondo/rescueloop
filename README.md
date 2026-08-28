@@ -92,6 +92,7 @@ The main commands, close to the actual CLI output:
 | `rescueloop stop` | Stop the watcher but keep its background registration |
 | `rescueloop status` | Show whether the watcher is installed and running |
 | `rescueloop doctor` | Explain watcher, event-source, queue, journal, storage, index, ledger, and log-writer health |
+| `rescueloop timeline <incident.json> [--json]` | Show the bounded, hash-linked lifecycle timeline for one incident |
 | `rescueloop restart` | Restart the registered watcher |
 | `rescueloop uninstall` | Stop the watcher and remove its background registration |
 | `rescueloop watch` | Run the detector in the current terminal |
@@ -113,6 +114,7 @@ rescueloop run --record-args ./deploy.sh --env prod
 # Background watcher lifecycle
 rescueloop status
 rescueloop doctor
+rescueloop timeline .rescueloop/incidents/<incident-id>.json
 rescueloop stop
 rescueloop start
 
@@ -187,13 +189,29 @@ RescueLoop can change a machine, so the boundary is deliberately narrow:
 - Supported file and configuration changes are backed up for rollback.
 - MCP cannot repair, replay, run a shell, or read arbitrary files.
 
-The MCP server is local and read-only. It exposes only `list_incidents` and `get_incident`:
+The MCP server is local and read-only. It exposes `list_incidents`, `get_incident`, and
+`get_incident_timeline`:
 
 ```sh
 rescueloop --incident-dir /absolute/path/to/.rescueloop/incidents mcp
 ```
 
 See [SECURITY.md](SECURITY.md) for the full security boundary and vulnerability reporting.
+
+## Incident timeline
+
+Each newly observed incident gets one durable lifecycle view assembled from the versioned incident
+JSON and append-only hash-chained ledger. It follows the operation from `observed`, `normalized`, and
+`persisted` through optional grouping and explicit analysis, approval, repair, verification, and the
+terminal `committed` or `rolled_back` result. Every event includes a timestamp, per-operation
+correlation ID, component, transition and outcome, bounded explanation, ledger entry ID, and—when
+applicable—a bounded delay or refusal reason.
+
+Press `T` in the console to open the selected incident's timeline, use the `timeline` command for
+text or JSON output, or call the read-only MCP timeline tool. Timeline output is capped at 256 events
+while retaining the origin events and latest activity. It contains no raw artifacts, launch
+arguments, working directories, provider errors, or other private evidence. MCP remains additive,
+local-stdio-only, read-only, bounded, and redacted; it cannot approve or execute repairs.
 
 ## Where it is going
 
