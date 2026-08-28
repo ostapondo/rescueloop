@@ -87,6 +87,14 @@ pub async fn remove_durable(path: &Path) -> Result<()> {
 }
 
 fn write_temporary(path: &Path, bytes: &[u8]) -> Result<(PathBuf, File)> {
+    #[cfg(debug_assertions)]
+    if std::env::var("RESCUELOOP_TEST_STORAGE_FAILURE").as_deref() == Ok("capacity") {
+        return Err(io::Error::new(
+            io::ErrorKind::StorageFull,
+            "injected storage capacity failure",
+        )
+        .into());
+    }
     let parent = path.parent().context("durable file path has no parent")?;
     fs::create_dir_all(parent)?;
     let temporary = parent.join(format!(".rescueloop-write-{}.tmp", uuid::Uuid::new_v4()));

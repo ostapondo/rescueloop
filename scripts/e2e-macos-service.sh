@@ -82,10 +82,12 @@ wait_for_health healthy
 
 HOME="$task_home" "$binary" --incident-dir "$incident_dir" run /usr/bin/false >/dev/null
 test "$(find "$incident_dir" -name '*.json' -type f | wc -l | tr -d ' ')" -eq 1
+printf '%s' 'not sqlite' >"$task_root/state/index-v1.db"
 HOME="$task_home" "$binary" --incident-dir "$incident_dir" doctor --json >"$task_root/final-doctor.json"
 jq -e '
   ((.checks[] | select(.name == "incident store") | .state) == "healthy")
   and ((.checks[] | select(.name == "lineage ledger") | .state) == "healthy")
+  and ((.checks[] | select(.name == "SQLite projection") | .state) == "healthy")
   and .queue_depth <= .queue_capacity
   and .received <= (.persisted + .grouped + .deduplicated + .journal_pending)
 ' "$task_root/final-doctor.json" >/dev/null
