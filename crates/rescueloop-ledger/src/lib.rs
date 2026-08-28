@@ -55,11 +55,23 @@ pub enum TimelineTransition {
     RolledBack,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineOutcome {
+    Completed,
+    Delayed,
+    Refused,
+    Failed,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewTimelineEvent {
+    pub schema_version: u16,
+    pub occurred_at: DateTime<Utc>,
     pub correlation_id: Uuid,
     pub component: TimelineComponent,
     pub transition: TimelineTransition,
+    pub outcome: TimelineOutcome,
     explanation: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     delay_or_refusal_reason: Option<String>,
@@ -68,8 +80,10 @@ pub struct NewTimelineEvent {
 impl NewTimelineEvent {
     pub fn bounded(
         correlation_id: Uuid,
+        occurred_at: DateTime<Utc>,
         component: TimelineComponent,
         transition: TimelineTransition,
+        outcome: TimelineOutcome,
         explanation: impl Into<String>,
         delay_or_refusal_reason: Option<String>,
     ) -> Result<Self> {
@@ -84,12 +98,23 @@ impl NewTimelineEvent {
             bail!("timeline delay or refusal reason must contain 1..=160 bytes")
         }
         Ok(Self {
+            schema_version: 1,
+            occurred_at,
             correlation_id,
             component,
             transition,
+            outcome,
             explanation,
             delay_or_refusal_reason,
         })
+    }
+
+    pub fn explanation(&self) -> &str {
+        &self.explanation
+    }
+
+    pub fn delay_or_refusal_reason(&self) -> Option<&str> {
+        self.delay_or_refusal_reason.as_deref()
     }
 }
 
@@ -166,14 +191,32 @@ fn parse_entries(content: &str) -> Result<Vec<LedgerEntry>> {
 )]
 pub async fn append(path: &Path, new: NewLedgerEntry) -> Result<LedgerEntry> {
     let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || append_locked(&path, new, false))
+    tokio::task::spawn_blocking(move || append_locked(&path, new, AppendMode::Always))
         .await??
         .context("unconditional ledger append was skipped")
 }
 
 pub async fn append_if_missing(path: &Path, new: NewLedgerEntry) -> Result<Option<LedgerEntry>> {
     let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || append_locked(&path, new, true)).await?
+    tokio::task::spawn_blocking(move || append_locked(&path, new, AppendMode::Incident)).await?
+}
+
+pub async fn append_timeline_if_missing(
+    path: &Path,
+    new: NewLedgerEntry,
+) -> Result<Option<LedgerEntry>> {
+    if new.timeline.is_none() {
+        bail!("timeline append requires timeline metadata")
+    }
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || append_locked(&path, new, AppendMode::Timeline)).await?
+}
+
+#[derive(Clone, Copy)]
+enum AppendMode {
+    Always,
+    Incident,
+    Timeline,
 }
 
 fn load_locked(path: &Path) -> Result<Vec<LedgerEntry>> {
@@ -203,7 +246,7 @@ fn read_entries(file: &File) -> Result<Vec<LedgerEntry>> {
 fn append_locked(
     path: &Path,
     new: NewLedgerEntry,
-    skip_existing_incident: bool,
+    mode: AppendMode,
 ) -> Result<Option<LedgerEntry>> {
     let parent = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(parent)?;
@@ -216,11 +259,23 @@ fn append_locked(
         .open(path)?;
     file.lock_exclusive()?;
     let prior = read_entries_for_append(&file, path)?;
-    if skip_existing_incident
-        && prior
+    let duplicate = match mode {
+        AppendMode::Always => false,
+        AppendMode::Incident => prior
             .iter()
-            .any(|entry| entry.incident_id == new.incident.id)
-    {
+            .any(|entry| entry.incident_id == new.incident.id),
+        AppendMode::Timeline => new.timeline.as_ref().is_some_and(|timeline| {
+            prior.iter().any(|entry| {
+                entry.incident_id == new.incident.id
+                    && entry.timeline.as_ref().is_some_and(|existing| {
+                        existing.correlation_id == timeline.correlation_id
+                            && existing.transition == timeline.transition
+                            && existing.outcome == timeline.outcome
+                    })
+            })
+        }),
+    };
+    if duplicate {
         FileExt::unlock(&file)?;
         return Ok(None);
     }
@@ -364,6 +419,8 @@ fn calculate_hash(entry: &LedgerEntry) -> Result<String> {
         status: &'a IncidentStatus,
         relation: &'a CausalRelation,
         related_entry: &'a Option<Uuid>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timeline: &'a Option<NewTimelineEvent>,
         previous_hash: &'a Option<String>,
     }
     let value = Hashable {
@@ -382,6 +439,7 @@ fn calculate_hash(entry: &LedgerEntry) -> Result<String> {
         status: &entry.status,
         relation: &entry.relation,
         related_entry: &entry.related_entry,
+        timeline: &entry.timeline,
         previous_hash: &entry.previous_hash,
     };
     Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(&value)?)))
@@ -415,6 +473,34 @@ mod tests {
         });
         value.normalized_failure.code = Some(code.into());
         value
+    }
+
+    #[test]
+    fn timeline_metadata_rejects_unbounded_text() {
+        assert!(
+            NewTimelineEvent::bounded(
+                Uuid::new_v4(),
+                Utc::now(),
+                TimelineComponent::Analyzer,
+                TimelineTransition::Analyzed,
+                TimelineOutcome::Failed,
+                "x".repeat(241),
+                None,
+            )
+            .is_err()
+        );
+        assert!(
+            NewTimelineEvent::bounded(
+                Uuid::new_v4(),
+                Utc::now(),
+                TimelineComponent::Approval,
+                TimelineTransition::Approved,
+                TimelineOutcome::Refused,
+                "approval stopped",
+                Some("x".repeat(161)),
+            )
+            .is_err()
+        );
     }
 
     fn new(incident: Incident, status: IncidentStatus) -> NewLedgerEntry {
@@ -477,6 +563,43 @@ mod tests {
             .replace("verified_fixed", "rolled_back");
         fs::write(&path, content).unwrap();
         assert!(load(&path).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn timeline_metadata_is_hash_protected() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("ledger.jsonl");
+        let mut entry = new(incident("oom", "1"), IncidentStatus::Investigating);
+        entry.timeline = Some(
+            NewTimelineEvent::bounded(
+                Uuid::new_v4(),
+                Utc::now(),
+                TimelineComponent::Analyzer,
+                TimelineTransition::Analyzed,
+                TimelineOutcome::Completed,
+                "bounded analysis completed",
+                None,
+            )
+            .unwrap(),
+        );
+        append(&path, entry).await.unwrap();
+        let content = fs::read_to_string(&path)
+            .unwrap()
+            .replace("bounded analysis completed", "bounded analysis tampered");
+        fs::write(&path, content).unwrap();
+        assert!(load(&path).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn entries_without_timeline_keep_the_legacy_json_shape() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("ledger.jsonl");
+        append(&path, new(incident("oom", "1"), IncidentStatus::Detected))
+            .await
+            .unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(!content.contains("\"timeline\""));
+        assert_eq!(load(&path).await.unwrap().len(), 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

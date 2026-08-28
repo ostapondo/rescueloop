@@ -89,6 +89,8 @@ pub struct Evidence {
 pub struct Incident {
     pub schema_version: u16,
     pub id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<Uuid>,
     pub observed_at: DateTime<Utc>,
     pub platform: String,
     pub kind: IncidentKind,
@@ -142,6 +144,7 @@ impl Incident {
         Self {
             schema_version: 1,
             id: Uuid::new_v4(),
+            correlation_id: Some(Uuid::new_v4()),
             observed_at,
             platform: platform.into(),
             kind,
@@ -164,6 +167,10 @@ impl Incident {
             last_observed_at: Some(observed_at),
             last_occurrence_id: None,
         }
+    }
+
+    pub fn correlation_id(&self) -> Uuid {
+        self.correlation_id.unwrap_or(self.id)
     }
 
     /// Excludes unstable and private fields.

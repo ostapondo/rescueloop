@@ -38,6 +38,13 @@ async fn indexed_grouping_ignores_unrelated_broken_projection() {
     assert_eq!(grouped_path, first_path);
     let grouped: Incident = serde_json::from_slice(&fs::read(first_path).await.unwrap()).unwrap();
     assert_eq!(grouped.occurrence_count, 2);
+    let timeline = crate::timeline::load(&directory, &grouped).await.unwrap();
+    let grouped_event = timeline
+        .iter()
+        .find(|event| event.lifecycle_transition == rescueloop_ledger::TimelineTransition::Grouped)
+        .unwrap();
+    assert_eq!(grouped_event.correlation_id, recurrence.correlation_id());
+    assert_eq!(timeline.len(), 4);
     fs::remove_dir_all(root).await.unwrap();
 }
 
@@ -99,7 +106,7 @@ async fn recovers_journal_before_occurrence_publication() {
             .await
             .unwrap()
             .len(),
-        1
+        3
     );
     fs::remove_dir_all(root).await.unwrap();
 }
@@ -124,7 +131,7 @@ async fn recovery_does_not_reapply_a_persisted_projection() {
             .await
             .unwrap()
             .len(),
-        1
+        3
     );
     fs::remove_dir_all(root).await.unwrap();
 }
