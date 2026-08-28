@@ -200,6 +200,8 @@ pub(crate) async fn save_incident(
         if let Some((_, path)) = grouping.incidents.iter().find(|(candidate, _)| {
             candidate.group_key == group_key || incident_group_key(candidate) == group_key
         }) {
+            let journal = observation_journal::begin(dir, incident).await?;
+            observation_journal::complete(&journal).await?;
             tracing::debug!(
                 event = "occurrence.duplicate",
                 incident_id = %incident.id,
