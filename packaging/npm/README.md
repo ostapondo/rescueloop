@@ -26,3 +26,16 @@ the next start refreshes the stable copy with a bounded native restart.
 
 The package includes native binaries for macOS arm64, macOS x64, and Windows x64. See the
 [RescueLoop repository](https://github.com/ostapondo/rescueloop) for full usage and security details.
+
+## Supported platforms
+
+| Operating system | Architecture |
+| --- | --- |
+| macOS | Apple silicon (`arm64`) and Intel (`x64`) |
+| Windows | Intel/AMD 64-bit (`x64`) |
+
+Node.js 18 or newer is required only for the npm launcher. RescueLoop itself is a native binary.
+Linux and Windows on ARM are not included in this release.
+
+Published packages include npm provenance. RescueLoop does not enable telemetry or send incident
+data anywhere by default.

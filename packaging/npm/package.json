@@ -1,7 +1,16 @@
 {
   "name": "rescueloop",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Local-first recovery agent for macOS and Windows",
+  "keywords": [
+    "incident-response",
+    "local-first",
+    "macos",
+    "observability",
+    "recovery",
+    "windows"
+  ],
+  "author": "ostapondo",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -16,7 +25,15 @@
     "bin",
     "native"
   ],
+  "os": [
+    "darwin",
+    "win32"
+  ],
   "engines": {
-    "node": ">=18"
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }
