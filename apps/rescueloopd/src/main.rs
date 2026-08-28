@@ -52,7 +52,11 @@ enum Command {
     /// Show whether the background watcher is installed and running.
     Status,
     /// Explain the health of RescueLoop, its event sources, and local state.
-    Doctor,
+    Doctor {
+        /// Emit the bounded local health snapshot as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Preview or explicitly write a bounded, redacted support bundle.
     Diagnostics {
         #[command(subcommand)]
@@ -234,7 +238,7 @@ async fn run(cli: Cli, log_guard: &logging::LogGuard) -> Result<()> {
         }
         Some(Command::Stop) => service::stop().await,
         Some(Command::Status) => service::status().await,
-        Some(Command::Doctor) => doctor::run(&cli.incident_dir, log_guard).await,
+        Some(Command::Doctor { json }) => doctor::run(&cli.incident_dir, log_guard, json).await,
         Some(Command::Diagnostics { action }) => match action {
             DiagnosticsAction::Export { output, confirm } => {
                 diagnostics::export(&cli.incident_dir, log_guard, output, confirm).await
@@ -334,7 +338,7 @@ impl Command {
             Self::Start => "start",
             Self::Stop => "stop",
             Self::Status => "status",
-            Self::Doctor => "doctor",
+            Self::Doctor { .. } => "doctor",
             Self::Diagnostics { .. } => "diagnostics",
             Self::Timeline { .. } => "timeline",
             Self::Restart => "restart",
