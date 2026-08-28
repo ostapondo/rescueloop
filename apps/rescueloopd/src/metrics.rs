@@ -214,4 +214,26 @@ mod tests {
         assert_eq!(duration.total_micros, duration.max_micros);
         assert_eq!(duration.max_micros, duration.last_micros);
     }
+
+    #[test]
+    fn concurrent_updates_are_not_lost() {
+        let registry = std::sync::Arc::new(Registry::default());
+        let workers = (0..8)
+            .map(|_| {
+                let registry = std::sync::Arc::clone(&registry);
+                std::thread::spawn(move || {
+                    for _ in 0..1_000 {
+                        registry.event_received(EventSource::Docker);
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        assert_eq!(
+            registry.snapshot().events_received_total[&EventSource::Docker],
+            8_000
+        );
+    }
 }
