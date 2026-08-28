@@ -2,6 +2,7 @@ $ErrorActionPreference = "Stop"
 $Root = Join-Path ([System.IO.Path]::GetTempPath()) ("rescueloop-e2e-" + [guid]::NewGuid())
 $PreviousRustLog = $env:RUST_LOG
 $env:RUST_LOG = "info"
+$ServiceInstalled = $false
 try {
     New-Item -ItemType Directory -Force -Path $Root | Out-Null
     $State = Join-Path $Root ".rescueloop"
@@ -62,9 +63,72 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "log integrity verification failed" }
     & cargo run --quiet -p rescueloop -- service status
     if ($LASTEXITCODE -ne 0) { throw "service status failed" }
+
+    function Assert-Health([string]$ExpectedWatcherState) {
+        $Deadline = [DateTime]::UtcNow.AddSeconds(15)
+        do {
+            $HealthText = & $Binary --incident-dir $Incidents doctor --json
+            if ($LASTEXITCODE -eq 0) {
+                $Health = $HealthText | ConvertFrom-Json
+                $Watcher = $Health.checks | Where-Object { $_.name -eq "watcher" }
+                $Protected = [uint64]$Health.persisted + [uint64]$Health.grouped + [uint64]$Health.deduplicated + [uint64]$Health.journal_pending
+                if ($Watcher.state -eq $ExpectedWatcherState -and $Health.queue_depth -le $Health.queue_capacity -and $Health.received -le $Protected) {
+                    return $Health
+                }
+            }
+            Start-Sleep -Milliseconds 250
+        } while ([DateTime]::UtcNow -lt $Deadline)
+        throw "watcher did not reach $ExpectedWatcherState health: $HealthText"
+    }
+
+    & $Binary --incident-dir $Incidents service install
+    if ($LASTEXITCODE -ne 0) { throw "scheduled task installation failed" }
+    $ServiceInstalled = $true
+    $InitialHealth = Assert-Health "healthy"
+    $InitialPid = (Get-Content (Join-Path $State "watch-health-v1.json") -Raw | ConvertFrom-Json).pid
+
+    $Task = Get-ScheduledTask -TaskName "RescueLoop"
+    if (-not ($Task.Triggers | Where-Object { $_.CimClass.CimClassName -eq "MSFT_TaskLogonTrigger" })) {
+        throw "scheduled task has no logon trigger"
+    }
+
+    & schtasks /End /TN RescueLoop | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "schtasks /End failed" }
+    $null = Assert-Health "degraded"
+    & $Binary restart
+    if ($LASTEXITCODE -ne 0) { throw "watcher restart failed" }
+    $null = Assert-Health "healthy"
+    $RestartedPid = (Get-Content (Join-Path $State "watch-health-v1.json") -Raw | ConvertFrom-Json).pid
+    if ($RestartedPid -eq $InitialPid) { throw "restart did not replace the watcher process" }
+
+    # Exercise the /End -> /Run race with concurrent idempotent starts.
+    & schtasks /End /TN RescueLoop | Out-Null
+    $Starts = 1..2 | ForEach-Object {
+        Start-Process -FilePath $Binary -ArgumentList @("--incident-dir", $Incidents, "start") -PassThru -WindowStyle Hidden
+    }
+    $Starts | Wait-Process
+    if ($Starts | Where-Object { $_.ExitCode -ne 0 }) { throw "concurrent watcher start failed" }
+    $null = Assert-Health "healthy"
+
+    # Force a non-English UI culture; numeric ScheduledTaskState remains stable.
+    $LocalizedState = & powershell -NoProfile -NonInteractive -Command "[cultureinfo]::CurrentUICulture=[cultureinfo]'pl-PL'; [int](Get-ScheduledTask -TaskName 'RescueLoop').State"
+    if ([int]$LocalizedState -ne 4) { throw "localized scheduled task state was not running" }
+
+    # Corrupt the disposable index, then prove doctor rebuilds it from incident JSON.
+    Set-Content -LiteralPath (Join-Path $State "index-v1.db") -Value "not sqlite" -NoNewline
+    $Rebuilt = & $Binary --incident-dir $Incidents doctor --json | ConvertFrom-Json
+    if (($Rebuilt.checks | Where-Object { $_.name -eq "SQLite projection" }).state -ne "healthy") {
+        throw "corrupted index was not rebuilt"
+    }
+    if (@(Get-ChildItem $Incidents -Filter *.json).Count -ne 2) {
+        throw "index recovery changed the durable incident count"
+    }
     Write-Host "Windows native E2E passed."
 }
 finally {
+    if ($ServiceInstalled) {
+        & $Binary service uninstall *> $null
+    }
     if ($null -eq $PreviousRustLog) {
         Remove-Item Env:RUST_LOG -ErrorAction SilentlyContinue
     } else {
