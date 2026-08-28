@@ -24,6 +24,75 @@ pub enum CausalRelation {
     AdverseEffect,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineComponent {
+    Detector,
+    Normalizer,
+    IncidentStore,
+    Grouper,
+    Analyzer,
+    Planner,
+    Approval,
+    Repair,
+    Verifier,
+    Ledger,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineTransition {
+    Observed,
+    Normalized,
+    Persisted,
+    Grouped,
+    Analyzed,
+    PlanProposed,
+    Approved,
+    Applied,
+    Verified,
+    Committed,
+    RolledBack,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewTimelineEvent {
+    pub correlation_id: Uuid,
+    pub component: TimelineComponent,
+    pub transition: TimelineTransition,
+    explanation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    delay_or_refusal_reason: Option<String>,
+}
+
+impl NewTimelineEvent {
+    pub fn bounded(
+        correlation_id: Uuid,
+        component: TimelineComponent,
+        transition: TimelineTransition,
+        explanation: impl Into<String>,
+        delay_or_refusal_reason: Option<String>,
+    ) -> Result<Self> {
+        let explanation = explanation.into();
+        if explanation.is_empty() || explanation.len() > 240 {
+            bail!("timeline explanation must contain 1..=240 bytes")
+        }
+        if delay_or_refusal_reason
+            .as_ref()
+            .is_some_and(|reason| reason.is_empty() || reason.len() > 160)
+        {
+            bail!("timeline delay or refusal reason must contain 1..=160 bytes")
+        }
+        Ok(Self {
+            correlation_id,
+            component,
+            transition,
+            explanation,
+            delay_or_refusal_reason,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewLedgerEntry {
     pub incident: Incident,
@@ -35,6 +104,7 @@ pub struct NewLedgerEntry {
     /// Only `AdverseEffect` requires an explicit causal assertion. Other values
     /// are derived from stable fingerprints and prior entries.
     pub relation_override: Option<CausalRelation>,
+    pub timeline: Option<NewTimelineEvent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +124,8 @@ pub struct LedgerEntry {
     pub status: IncidentStatus,
     pub relation: CausalRelation,
     pub related_entry: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<NewTimelineEvent>,
     pub previous_hash: Option<String>,
     pub entry_hash: String,
 }
@@ -174,6 +246,7 @@ fn append_locked(
         status: new.status,
         relation,
         related_entry,
+        timeline: new.timeline,
         previous_hash: prior.last().map(|x| x.entry_hash.clone()),
         entry_hash: String::new(),
     };
@@ -353,6 +426,7 @@ mod tests {
             verifier: None,
             status,
             relation_override: None,
+            timeline: None,
         }
     }
 

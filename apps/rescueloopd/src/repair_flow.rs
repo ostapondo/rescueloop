@@ -311,6 +311,7 @@ async fn record_repair_lineage(
             verifier: Some(verifier),
             status,
             relation_override: None,
+            timeline: None,
         },
     )
     .await?;
