@@ -11,6 +11,7 @@ mod doctor;
 mod incident_store;
 mod logging;
 mod mcp;
+mod metrics;
 mod observation_journal;
 mod repair_flow;
 mod service;
