@@ -118,11 +118,15 @@ executable or delete incident history.
 
 `rescueloop doctor` reads a bounded local health snapshot and answers whether the watcher is
 running, what each event source can currently see, and whether queueing or durable local state is
-degraded. The TUI shows the same summary and refreshes it every two seconds.
+degraded. The TUI shows the same summary, refreshes it every two seconds, and opens the complete
+component/source view with `V`.
 
 The watcher publishes `watch-health-v1.json` atomically inside the private RescueLoop state
 directory. It contains source names, counters, timestamps, queue occupancy, backoff, uptime, and a
-bounded shutdown reason. It never contains raw artifacts, launch arguments, incident evidence,
+bounded shutdown reason. An unclosed snapshot from a watcher that is no longer running is reported
+as `abnormal_or_interrupted`. Exact duplicates and grouped recurrences are counted separately, and
+log-writer failures come from the background watcher rather than the inspecting CLI process. The
+snapshot never contains raw artifacts, launch arguments, incident evidence,
 tokens, or private paths. The file is a disposable operational projection; incident JSON and the
 lineage ledger remain the durable sources of truth.
 
