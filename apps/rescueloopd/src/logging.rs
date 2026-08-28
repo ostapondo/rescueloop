@@ -8,7 +8,8 @@ mod query;
 mod writer;
 
 pub use query::{LogOutput, LogQuery, run as query};
-use writer::{LogHealth, RollingWriter, WriterConfig};
+pub(crate) use writer::LogHealth;
+use writer::{RollingWriter, WriterConfig};
 
 const DEFAULT_FILTER: &str = "info,hyper=warn,reqwest=warn,rustls=warn";
 const DEFAULT_RETENTION_DAYS: usize = 14;
@@ -66,6 +67,10 @@ pub fn init(incident_dir: &Path) -> Result<LogGuard> {
 }
 
 impl LogGuard {
+    pub fn health(&self) -> LogHealth {
+        self.health.clone()
+    }
+
     pub fn write_errors(&self) -> u64 {
         self.health.write_errors()
     }

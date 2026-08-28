@@ -39,6 +39,7 @@ pub struct DoctorSnapshot {
     pub sources: Vec<watch_health::SourceSnapshot>,
     pub received: u64,
     pub persisted: u64,
+    pub grouped: u64,
     pub deduplicated: u64,
     pub queue_depth: usize,
     pub queue_capacity: usize,
@@ -73,6 +74,12 @@ pub async fn collect(incident_dir: &Path, logs: &LogGuard) -> DoctorSnapshot {
         Err(_) => None,
     };
     let ledger = rescueloop_ledger::load(&incident_store::ledger_path(incident_dir)).await;
+    let background_log_errors = watcher
+        .as_ref()
+        .map_or(logs.write_errors(), |value| value.log_write_errors);
+    let background_export_drops = watcher
+        .as_ref()
+        .map_or(logs.export_drops(), |value| value.log_export_drops);
 
     let mut checks = vec![
         Check {
@@ -124,15 +131,13 @@ pub async fn collect(incident_dir: &Path, logs: &LogGuard) -> DoctorSnapshot {
         },
         Check {
             name: "log writer".into(),
-            state: if logs.write_errors() == 0 {
+            state: if background_log_errors == 0 {
                 HealthState::Healthy
             } else {
                 HealthState::Degraded
             },
             detail: format!(
-                "{} write error(s), {} bounded export drop(s)",
-                logs.write_errors(),
-                logs.export_drops()
+                "{background_log_errors} background write error(s), {background_export_drops} bounded export drop(s)"
             ),
         },
         Check {
@@ -169,13 +174,17 @@ pub async fn collect(incident_dir: &Path, logs: &LogGuard) -> DoctorSnapshot {
                 .ok()
                 .map(|duration| duration.as_secs())
         }),
-        last_shutdown_reason: watcher
-            .as_ref()
-            .and_then(|snapshot| snapshot.shutdown_reason.clone()),
+        last_shutdown_reason: watcher.as_ref().and_then(|snapshot| {
+            snapshot
+                .shutdown_reason
+                .clone()
+                .or_else(|| (!watcher_running).then(|| "abnormal_or_interrupted".into()))
+        }),
         checks,
         sources,
         received: watcher.as_ref().map_or(0, |value| value.received),
         persisted: watcher.as_ref().map_or(0, |value| value.persisted),
+        grouped: watcher.as_ref().map_or(0, |value| value.grouped),
         deduplicated: watcher.as_ref().map_or(0, |value| value.deduplicated),
         queue_depth: watcher.as_ref().map_or(0, |value| value.queue_depth),
         queue_capacity: watcher.as_ref().map_or(0, |value| value.queue_capacity),
@@ -216,8 +225,8 @@ pub async fn run(incident_dir: &Path, logs: &LogGuard) -> Result<()> {
     }
     println!("\nPIPELINE");
     println!(
-        "received={} persisted={} deduplicated={}",
-        snapshot.received, snapshot.persisted, snapshot.deduplicated
+        "received={} persisted={} grouped={} deduplicated={}",
+        snapshot.received, snapshot.persisted, snapshot.grouped, snapshot.deduplicated
     );
     println!(
         "queue={}/{} journal_pending={}",

@@ -7,14 +7,14 @@ use tracing::{error, info, warn};
 
 use crate::{
     console::load_settings,
-    incident_store::{recover_pending_observations, save_incident},
+    incident_store::{SaveOutcome, recover_pending_observations, save_incident},
     watch_health::{self, WatchHealth},
 };
 
 const EVENT_QUEUE_CAPACITY: usize = 256;
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub async fn run(directory: &Path) -> Result<()> {
+pub async fn run(directory: &Path, log_health: crate::logging::LogHealth) -> Result<()> {
     tokio::fs::create_dir_all(directory).await?;
     let recovered = recover_pending_observations(directory).await?;
     if recovered > 0 {
@@ -33,6 +33,7 @@ pub async fn run(directory: &Path) -> Result<()> {
 
     let (sender, mut events) = mpsc::channel(EVENT_QUEUE_CAPACITY);
     let health = Arc::new(WatchHealth::new(EVENT_QUEUE_CAPACITY));
+    health.set_log_health(log_health.write_errors(), log_health.export_drops());
     watch_health::publish(directory, &health.snapshot(None)).await?;
     let cancellation = CancellationToken::new();
     let mut tasks = JoinSet::new();
@@ -42,6 +43,7 @@ pub async fn run(directory: &Path) -> Result<()> {
         directory.to_path_buf(),
         Arc::clone(&health),
         cancellation.clone(),
+        log_health.clone(),
     );
     for source in sources {
         tasks.spawn(run_source(
@@ -159,6 +161,7 @@ fn spawn_heartbeat(
     incident_dir: std::path::PathBuf,
     health: Arc<WatchHealth>,
     cancellation: CancellationToken,
+    log_health: crate::logging::LogHealth,
 ) {
     tasks.spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -167,6 +170,7 @@ fn spawn_heartbeat(
             tokio::select! {
                 _ = cancellation.cancelled() => return,
                 _ = interval.tick() => {
+                    health.set_log_health(log_health.write_errors(), log_health.export_drops());
                     let snapshot = health.snapshot(None);
                     if let Err(error) = watch_health::publish(&incident_dir, &snapshot).await {
                         warn!(event = "watch.health_publish_failed", error = %format!("{error:#}"), "Watcher health snapshot could not be published");
@@ -264,12 +268,21 @@ async fn persist(
     health: &WatchHealth,
 ) -> Result<()> {
     health.dequeued();
-    let (destination, created) = save_incident(directory, &incident).await?;
-    if !created {
-        health.deduplicated(source);
-        watch_health::publish(directory, &health.snapshot(None)).await?;
-        info!(event = "incident.grouped", incident_id = %incident.id, "Incident grouped with an active failure");
-        return Ok(());
+    let (destination, outcome) = save_incident(directory, &incident).await?;
+    match outcome {
+        SaveOutcome::Duplicate => {
+            health.deduplicated(source);
+            watch_health::publish(directory, &health.snapshot(None)).await?;
+            info!(event = "incident.duplicate", incident_id = %incident.id, "Exact duplicate observation ignored");
+            return Ok(());
+        }
+        SaveOutcome::Grouped => {
+            health.grouped();
+            watch_health::publish(directory, &health.snapshot(None)).await?;
+            info!(event = "incident.grouped", incident_id = %incident.id, "Incident grouped with an active failure");
+            return Ok(());
+        }
+        SaveOutcome::Created => {}
     }
     health.persisted();
     watch_health::publish(directory, &health.snapshot(None)).await?;

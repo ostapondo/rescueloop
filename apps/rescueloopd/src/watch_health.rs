@@ -47,9 +47,15 @@ pub struct Snapshot {
     pub sources: Vec<SourceSnapshot>,
     pub received: u64,
     pub persisted: u64,
+    #[serde(default)]
+    pub grouped: u64,
     pub deduplicated: u64,
     pub queue_depth: usize,
     pub queue_capacity: usize,
+    #[serde(default)]
+    pub log_write_errors: u64,
+    #[serde(default)]
+    pub log_export_drops: u64,
 }
 
 #[derive(Default)]
@@ -69,8 +75,11 @@ pub struct WatchHealth {
     sources: Mutex<BTreeMap<String, SourceHealth>>,
     received: AtomicU64,
     persisted: AtomicU64,
+    grouped: AtomicU64,
     deduplicated: AtomicU64,
     queue_depth: AtomicUsize,
+    log_write_errors: AtomicU64,
+    log_export_drops: AtomicU64,
 }
 
 impl Default for WatchHealth {
@@ -87,8 +96,11 @@ impl WatchHealth {
             sources: Mutex::new(BTreeMap::new()),
             received: AtomicU64::new(0),
             persisted: AtomicU64::new(0),
+            grouped: AtomicU64::new(0),
             deduplicated: AtomicU64::new(0),
             queue_depth: AtomicUsize::new(0),
+            log_write_errors: AtomicU64::new(0),
+            log_export_drops: AtomicU64::new(0),
         }
     }
 
@@ -123,6 +135,9 @@ impl WatchHealth {
     pub fn persisted(&self) {
         self.persisted.fetch_add(1, Ordering::Relaxed);
     }
+    pub fn grouped(&self) {
+        self.grouped.fetch_add(1, Ordering::Relaxed);
+    }
     pub fn deduplicated(&self, source: &str) {
         self.deduplicated.fetch_add(1, Ordering::Relaxed);
         self.update_source(source, |s| {
@@ -134,6 +149,10 @@ impl WatchHealth {
     }
     pub fn dequeued(&self) {
         saturating_decrement(&self.queue_depth);
+    }
+    pub fn set_log_health(&self, write_errors: u64, export_drops: u64) {
+        self.log_write_errors.store(write_errors, Ordering::Relaxed);
+        self.log_export_drops.store(export_drops, Ordering::Relaxed);
     }
 
     pub fn snapshot(&self, shutdown_reason: Option<String>) -> Snapshot {
@@ -163,9 +182,12 @@ impl WatchHealth {
             sources,
             received: self.received.load(Ordering::Relaxed),
             persisted: self.persisted.load(Ordering::Relaxed),
+            grouped: self.grouped.load(Ordering::Relaxed),
             deduplicated: self.deduplicated.load(Ordering::Relaxed),
             queue_depth: self.queue_depth.load(Ordering::Relaxed),
             queue_capacity: self.queue_capacity,
+            log_write_errors: self.log_write_errors.load(Ordering::Relaxed),
+            log_export_drops: self.log_export_drops.load(Ordering::Relaxed),
         }
     }
 
