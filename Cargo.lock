@@ -1785,7 +1785,7 @@ dependencies = [
 
 [[package]]
 name = "rescueloop"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1825,7 +1825,7 @@ dependencies = [
 
 [[package]]
 name = "rescueloop-agent"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
  "reqwest 0.12.28",
@@ -1838,7 +1838,7 @@ dependencies = [
 
 [[package]]
 name = "rescueloop-core"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1852,7 +1852,7 @@ dependencies = [
 
 [[package]]
 name = "rescueloop-index"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "rescueloop-core",
@@ -1866,7 +1866,7 @@ dependencies = [
 
 [[package]]
 name = "rescueloop-ledger"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1883,7 +1883,7 @@ dependencies = [
 
 [[package]]
 name = "rescueloop-platform"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1900,7 +1900,7 @@ dependencies = [
 
 [[package]]
 name = "rescueloop-repair"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "chrono",
