@@ -84,7 +84,7 @@ h1 em { color: var(--orange); font-style: normal; }
 .section-heading > p:last-child { margin: 0; color: var(--muted); font-size: .72rem; }
 .section-heading strong { display: inline-block; margin-left: .7rem; padding: .25rem .55rem; color: var(--green); border: 1px solid var(--green); font-weight: 400; }
 .timeline ol { list-style: none; padding: 0; margin: 0; border: 1px solid var(--line); }
-.timeline li { min-height: 3.35rem; padding: .65rem .8rem; display: grid; grid-template-columns: 1rem 6.8rem 6.7rem 1fr auto; align-items: center; gap: .5rem; border-bottom: 1px solid var(--line); font-size: .7rem; }
+.timeline li { min-height: 3.35rem; padding: .65rem .8rem; display: grid; grid-template-columns: 1rem 7.5rem 6.2rem 1fr auto; align-items: center; gap: .5rem; border-bottom: 1px solid var(--line); font-size: .68rem; }
 .timeline li:last-child { border: 0; }
 .timeline li p { margin: 0; color: #b8bbb8; }
 .timeline li small { color: var(--orange); }

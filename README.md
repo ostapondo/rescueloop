@@ -1,17 +1,24 @@
 # RescueLoop
 
-Your computer breaks. RescueLoop figures out why and helps fix it.
+**RescueLoop watches your computer for errors and offers a fix.**
 
-**Lightweight enough to keep running. Careful enough to trust with recovery.**
+The idea is simple: catch errors anywhere in the system, explain what happened, and offer a solution.
+RescueLoop runs in the background and watches for problems. This includes app crashes, failed commands,
+stopped services, resource problems, and unhealthy containers.
 
-It runs in the background and watches for crashes, failed commands, broken services, resource problems,
-and unhealthy containers. When something goes wrong, RescueLoop keeps the useful evidence, finds the
-likely cause, and prepares a repair.
+It does not support every possible error yet. The goal is to keep adding new sources until one tool can
+show you problems from across the whole system.
 
-Nothing is fixed behind your back. You see the plan, approve it, and RescueLoop checks whether the
-problem is actually gone. If a repair fails, it rolls back the change when it can.
+When RescueLoop finds a problem:
 
-Everything stays on your machine unless you explicitly ask an AI agent for help.
+1. It tells you **what broke**.
+2. It collects the information that can explain **why it broke**.
+3. It offers a solution and waits for **your approval**.
+4. It applies the fix and checks that the problem is **actually gone**.
+5. If the fix does not work, it puts things back when it can.
+
+AI cannot run random commands through RescueLoop. Your problem history stays on your machine. Nothing
+is sent to an AI unless you ask for analysis.
 
 **macOS and Windows today. Linux next.**
 
@@ -19,12 +26,22 @@ Everything stays on your machine unless you explicitly ask an AI agent for help.
 
 ![RescueLoop incident console](assets/rescueloop-console.png)
 
+## A simple example
+
+Imagine that a local database stops starting after its configuration file changes.
+
+Without RescueLoop, you search through logs, guess what changed, edit files, and hope the database starts.
+
+With RescueLoop, you see the failed start, the configuration change, and a suggested fix in one place.
+You approve the fix. RescueLoop then starts the database again to check that it works.
+
 ## How it works
 
-1. **Detect** — notice a crash, failed process, broken service, container problem, or resource issue.
-2. **Understand** — collect the relevant evidence and connect repeated failures.
-3. **Repair** — prepare a small, reviewable change instead of running an arbitrary command.
-4. **Verify** — repeat the failed action and roll back when the repair did not work.
+1. **Notice:** See that something stopped working.
+2. **Explain:** Collect only the clues related to that problem.
+3. **Ask:** Show you the proposed fix and wait for permission.
+4. **Fix:** Make one known, limited change.
+5. **Check:** Try the failed action again and undo the repair if it did not help.
 
 ## What works now
 
