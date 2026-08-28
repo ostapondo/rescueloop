@@ -589,7 +589,7 @@ mod cli_tests {
             Some(Command::Timeline {
                 incident,
                 json: true
-            }) if incident == std::path::PathBuf::from("incident.json")
+            }) if incident == std::path::Path::new("incident.json")
         ));
     }
 }

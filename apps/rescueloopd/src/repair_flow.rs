@@ -174,7 +174,7 @@ async fn repair_impl(
                     rescueloop_core::IncidentStatus::RepairProposed,
                 )
                 .await?;
-                return Err(error.into());
+                return Err(error);
             }
         };
         record_timeline(
@@ -362,7 +362,7 @@ async fn repair_impl(
                 rescueloop_core::IncidentStatus::RepairProposed,
             )
             .await?;
-            return Err(error.into());
+            return Err(error);
         }
     }
     record_timeline(
@@ -534,6 +534,7 @@ async fn repair_impl(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn record_timeline(
     incident_dir: &Path,
     incident: &Incident,
