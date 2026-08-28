@@ -52,9 +52,15 @@ struct App {
     analysis: Option<AnalysisResponse>,
     agent_name: String,
     show_history: bool,
+    health: crate::doctor::DoctorSnapshot,
 }
 
-pub async fn run(dir: PathBuf, endpoint: Option<String>, token: Option<String>) -> Result<()> {
+pub async fn run(
+    dir: PathBuf,
+    endpoint: Option<String>,
+    token: Option<String>,
+    log_guard: &crate::logging::LogGuard,
+) -> Result<()> {
     let provider = configured_provider(&dir, endpoint.clone(), token.clone()).await?;
     let needs_agent_onboarding = provider.is_none() && endpoint.is_none();
     let agent_name = provider
@@ -76,6 +82,7 @@ pub async fn run(dir: PathBuf, endpoint: Option<String>, token: Option<String>) 
         analysis: initial_analysis,
         agent_name,
         show_history: false,
+        health: crate::doctor::collect(&dir, log_guard).await,
     };
     let (sender, mut results) =
         mpsc::unbounded_channel::<(Uuid, Result<AnalysisResponse, String>)>();
@@ -161,6 +168,7 @@ pub async fn run(dir: PathBuf, endpoint: Option<String>, token: Option<String>) 
                     };
                 }
                 app.incidents = refreshed;
+                app.health = crate::doctor::collect(&dir, log_guard).await;
                 last_refresh = Instant::now();
             }
             if !event::poll(Duration::from_millis(100))? {

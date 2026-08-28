@@ -202,7 +202,7 @@ async fn run(cli: Cli, log_guard: &logging::LogGuard) -> Result<()> {
     match cli.command {
         None | Some(Command::Start) => {
             service::ensure_started(&cli.incident_dir).await?;
-            tui::run(cli.incident_dir, None, None).await
+            tui::run(cli.incident_dir, None, None, log_guard).await
         }
         Some(Command::Stop) => service::stop().await,
         Some(Command::Status) => service::status().await,
@@ -259,7 +259,7 @@ async fn run(cli: Cli, log_guard: &logging::LogGuard) -> Result<()> {
             if plain {
                 console(&cli.incident_dir, endpoint, token).await
             } else {
-                tui::run(cli.incident_dir, endpoint, token).await
+                tui::run(cli.incident_dir, endpoint, token, log_guard).await
             }
         }
         Some(Command::Analyze {

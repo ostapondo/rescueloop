@@ -20,12 +20,14 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
+            Constraint::Length(4),
             Constraint::Min(16),
             Constraint::Length(footer_height),
         ])
         .split(area);
 
     render_header(frame, app, chunks[0]);
+    render_health(frame, app, chunks[1]);
 
     let incident_height = if area.height >= 34 {
         Constraint::Percentage(42)
@@ -35,10 +37,57 @@ pub(super) fn draw(frame: &mut Frame<'_>, app: &App) {
     let body = Layout::default()
         .direction(Direction::Vertical)
         .constraints([incident_height, Constraint::Min(9)])
-        .split(chunks[1]);
+        .split(chunks[2]);
     render_incidents(frame, app, body[0]);
     render_workspace(frame, app, body[1]);
-    render_footer(frame, app, chunks[2]);
+    render_footer(frame, app, chunks[3]);
+}
+
+fn render_health(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let healthy = app
+        .health
+        .sources
+        .iter()
+        .filter(|source| source.state == crate::watch_health::SourceState::Healthy)
+        .count();
+    let degraded = app
+        .health
+        .sources
+        .iter()
+        .filter(|source| source.state == crate::watch_health::SourceState::Degraded)
+        .count();
+    let disconnected = app
+        .health
+        .sources
+        .iter()
+        .filter(|source| source.state == crate::watch_health::SourceState::Disconnected)
+        .count();
+    let watcher = app
+        .health
+        .checks
+        .iter()
+        .find(|check| check.name == "watcher");
+    let state = watcher.map_or("UNKNOWN", |check| check.state.label());
+    let queue = if app.health.queue_capacity == 0 {
+        "unavailable".into()
+    } else {
+        format!("{}/{}", app.health.queue_depth, app.health.queue_capacity)
+    };
+    let text = format!(
+        "Watcher: {state}  Sources: {healthy} healthy / {degraded} degraded / {disconnected} disconnected\nQueue: {queue}  Journal backlog: {}  Received: {}  Persisted: {}  Deduplicated: {}",
+        app.health.journal_pending,
+        app.health.received,
+        app.health.persisted,
+        app.health.deduplicated
+    );
+    frame.render_widget(
+        Paragraph::new(text).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Self-health · `rescueloop doctor` for details "),
+        ),
+        area,
+    );
 }
 
 fn render_header(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -488,6 +537,23 @@ mod tests {
             }),
             agent_name: "fixture-agent".into(),
             show_history: false,
+            health: crate::doctor::DoctorSnapshot {
+                version: "0.0.1".into(),
+                watcher_uptime_seconds: Some(10),
+                last_shutdown_reason: None,
+                checks: vec![crate::doctor::Check {
+                    name: "watcher".into(),
+                    state: crate::doctor::HealthState::Healthy,
+                    detail: "running".into(),
+                }],
+                sources: Vec::new(),
+                received: 1,
+                persisted: 1,
+                deduplicated: 0,
+                queue_depth: 0,
+                queue_capacity: 256,
+                journal_pending: 0,
+            },
         };
 
         for (width, height) in [(180, 48), (96, 32)] {
@@ -502,6 +568,7 @@ mod tests {
                 .map(|cell| cell.symbol())
                 .collect::<String>();
             assert!(rendered.contains("Active incidents"));
+            assert!(rendered.contains("Self-health"));
             assert!(rendered.contains("Evidence"));
             assert!(rendered.contains("Analysis · saved"));
             assert!(rendered.contains("Proposed repair"));
