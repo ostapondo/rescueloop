@@ -58,6 +58,8 @@ pub struct Snapshot {
     pub log_write_errors: u64,
     #[serde(default)]
     pub log_export_drops: u64,
+    #[serde(default)]
+    pub metrics: crate::metrics::MetricsSnapshot,
 }
 
 #[derive(Default)]
@@ -205,6 +207,7 @@ impl WatchHealth {
             queue_capacity: self.queue_capacity,
             log_write_errors: self.log_write_errors.load(Ordering::Relaxed),
             log_export_drops: self.log_export_drops.load(Ordering::Relaxed),
+            metrics: crate::metrics::registry().snapshot(),
         }
     }
 
@@ -265,6 +268,7 @@ fn snapshot_path(incident_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{SourceState, WatchHealth};
+    use serde_json::json;
     #[test]
     fn tracks_source_and_queue_health() {
         let health = WatchHealth::new(256);
@@ -284,6 +288,28 @@ mod tests {
         assert_eq!(snapshot.deduplicated, 1);
         assert_eq!(snapshot.queue_depth, 0);
         assert_eq!(snapshot.queue_capacity, 256);
+    }
+
+    #[test]
+    fn older_snapshots_default_missing_metrics() {
+        let snapshot: super::Snapshot = serde_json::from_value(json!({
+            "schema_version": super::WATCH_HEALTH_SCHEMA_VERSION,
+            "version": "fixture",
+            "pid": 1,
+            "started_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "shutdown_reason": null,
+            "sources": [],
+            "received": 0,
+            "persisted": 0,
+            "deduplicated": 0,
+            "queue_depth": 0,
+            "queue_capacity": 8,
+            "log_write_errors": 0,
+            "log_export_drops": 0
+        }))
+        .unwrap();
+        assert_eq!(snapshot.metrics, crate::metrics::MetricsSnapshot::default());
     }
 
     #[tokio::test]

@@ -266,6 +266,25 @@ fn render_doctor(frame: &mut Frame<'_>, app: &App, area: Rect) {
         app.health.watcher_uptime_seconds.map_or_else(|| "unknown".into(), |value| format!("{value}s")),
         app.health.last_shutdown_reason.as_deref().unwrap_or("none recorded")
     ));
+    text.push_str(&format!(
+        "\n\nLOCAL METRICS · export disabled\nreconnects={} queue={} rollbacks={} log_failures={} index_rebuilds={} journal={}\npersist={}us/{} grouping={}us/{} analysis={}us/{} repair={}us/{} verification={}us/{}",
+        app.health.metrics.source_reconnects_total,
+        app.health.metrics.queue_depth,
+        app.health.metrics.rollback_total,
+        app.health.metrics.log_write_failures_total,
+        app.health.metrics.index_rebuild_total,
+        app.health.metrics.journal_pending_count,
+        app.health.metrics.incident_persist_duration.last_micros,
+        app.health.metrics.incident_persist_duration.count,
+        app.health.metrics.incident_grouping_duration.last_micros,
+        app.health.metrics.incident_grouping_duration.count,
+        app.health.metrics.analysis_duration.last_micros,
+        app.health.metrics.analysis_duration.count,
+        app.health.metrics.repair_duration.last_micros,
+        app.health.metrics.repair_duration.count,
+        app.health.metrics.verification_duration.last_micros,
+        app.health.metrics.verification_duration.count,
+    ));
     render_panel(frame, area, " Self-health · [V/Esc] Close ", text, ACCENT);
 }
 
@@ -607,6 +626,7 @@ mod tests {
                 queue_depth: 0,
                 queue_capacity: 256,
                 journal_pending: 0,
+                metrics: crate::metrics::MetricsSnapshot::default(),
             },
         };
 
